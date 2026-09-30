@@ -98,6 +98,8 @@
 
   let mode = modeEl.value;  // 'computer', 'local' (two players on this screen) or 'online'
   let game, playerColor, legal, selected, lastMove, positions, history, result;
+  let lastFx = 0;           // what chaos powerups did along with the last move (see Game.lastFx)
+  let powerTime = 0;        // clock time a chaos powerup gave for the last move
   let redoStack = [];       // moves taken back with Undo, the next one to redo last
   // The rules of the game being played: { variant, fen (the starting position), time ({ base, inc }
   // in milliseconds, or null for no clock), seed (for chaos rounds) }.
@@ -110,7 +112,7 @@
   // running), `used` the time both have used between them (chaos rounds go by it) and `mark` the
   // time each had when the current turn began.
   let clock = null;
-  let chaos = null;         // chaos bookkeeping (see Chaos.newState) plus the next round's number
+  let chaos = null;         // in a chaos game: { round }, the number of the next draft
   let draft = null;         // the chaos round being picked: { round, offers, picks }
   let drafting = false;     // a chaos round is due or being picked, so nobody can move
   let draftTimer = null;
@@ -299,16 +301,16 @@
     worker = null;
   }
 
+  // Stockfish knows nothing of chaos powerups, so in a chaos game grandmasters are played by our
+  // own engine at full strength.
   function think() {
-    if (gameGm && !stockfishFailed) return thinkLikeGrandmaster();
+    if (gameGm && !stockfishFailed && !chaos) return thinkLikeGrandmaster();
     return thinkOurselves(Math.min(gameRating, MAX_RATING));
   }
 
-  // Limits on the computer's choice: frozen pieces stay put, and it hurries when short of time.
+  // The computer hurries when it is short of time.
   function thinkOptions() {
-    const exclude = chaos ? chaos.frozen.filter((f) => f.color === game.turn).map((f) => f.sq) : [];
-    const maxMs = clock ? Math.max(100, clockLeft(game.turn) / 30) : Infinity;
-    return { exclude, maxMs };
+    return { maxMs: clock ? Math.max(100, clockLeft(game.turn) / 30) : Infinity };
   }
 
   function thinkOurselves(rating) {
@@ -327,11 +329,8 @@
   function thinkLikeGrandmaster() {
     const current = game, ply = history.length;
     const stillHere = () => current === game && ply === history.length;
-    // A chaos round changes the board in ways moves cannot, so Stockfish gets the position itself.
-    const position = chaos ? { fen: game.fen() }
-      : { fen: gameSetup.fen === START_FEN ? null : gameSetup.fen, moves: history.map(moveToUci) };
+    const position = { fen: gameSetup.fen === START_FEN ? null : gameSetup.fen, moves: history.map(moveToUci) };
     if (clock) position.movetime = clockLeft(game.turn) / 30;
-    if (chaos && chaos.frozen.some((f) => f.color === game.turn)) position.only = legal.map(moveToUci);
     // Should Stockfish ever fail to answer (a position it cannot make sense of), stop waiting for it.
     const giveUp = new Promise((resolve) => setTimeout(() => resolve('timeout'), 25000));
     return Promise.race([Grandmasters.bestMove(gameGm, position), giveUp]).then(
@@ -397,7 +396,7 @@
     timeline = [];
     redoStack = [];
     positions = new Map([[game.key(), 1]]);
-    chaos = gameSetup.variant === 'chaos' ? { ...Chaos.newState(), round: 0 } : null;
+    chaos = gameSetup.variant === 'chaos' ? { round: 0 } : null;
     const base = gameSetup.time ? gameSetup.time.base : 0;
     clock = gameSetup.time ? {
       base, inc: gameSetup.time.inc, left: { [WHITE]: base, [BLACK]: base }, mark: { [WHITE]: base, [BLACK]: base },
@@ -442,7 +441,7 @@
   }
 
   function validPicks(round, picks) {
-    return Boolean(picks) && [WHITE, BLACK].every((color) => Chaos.offers(gameSetup.seed, round, color).includes(picks[color]));
+    return Boolean(picks) && [WHITE, BLACK].every((color) => Chaos.offers(gameSetup.seed, round, color, game).includes(picks[color]));
   }
 
   // An online game as it stands, for a friend who (re)joins.
@@ -558,8 +557,10 @@
   }
 
   // Makes a move on the board without any of the presentation; returns the new position's key.
+  // What chaos powerups did along with it is left in lastFx.
   function record(move) {
     game.make(move);
+    lastFx = game.lastFx;
     history.push(move);
     lastMove = move;
     const key = game.key();
@@ -567,47 +568,17 @@
     return key;
   }
 
-  // Plays a move with the chaos rules that come with it, but none of the presentation. Returns the
-  // new position's key.
+  // Plays a move without any of the presentation, and notes it in the timeline. Returns the new
+  // position's key.
   function advance(move) {
-    const mover = game.turn;
-    if (chaos && move.captured) chaos.captured[mover ^ 8].push(move.captured & 7);
     const key = record(move);
     timeline.push({ type: 'move', from: move.from, to: move.to, promo: move.promo || 0 });
-    if (chaos) {
-      // Frozen pieces thaw a turn at a time, and are forgotten once taken.
-      chaos.frozen = chaos.frozen.filter((f) => {
-        if (f.color === mover) f.turns--;
-        const piece = game.board[f.sq];
-        return f.turns > 0 && piece && (piece & 8) === f.color;
-      });
-      // Rage: the same side moves again, unless its move gave check or ended the game.
-      if (chaos.rage[mover]) {
-        chaos.rage[mover] = false;
-        if (!game.inCheck() && game.legalMoves().length && !game.insufficientMaterial()) {
-          const ep = game.ep;
-          game.turn = mover;
-          game.ep = -1;
-          if (!game.legalMoves().length) {
-            game.turn = mover ^ 8;
-            game.ep = ep;
-          }
-        }
-      }
-    }
     return key;
   }
 
-  // The moves the side to move may make: all legal ones, less those of frozen pieces. Frozen pieces
-  // thaw early rather than leave no move at all.
+  // The moves the side to move may make (the engine knows the chaos powerups).
   function computeLegal() {
-    const moves = game.legalMoves();
-    if (!chaos) return moves;
-    const frozen = new Set(chaos.frozen.filter((f) => f.color === game.turn).map((f) => f.sq));
-    const free = moves.filter((m) => !frozen.has(m.from));
-    if (free.length || !moves.length) return free;
-    chaos.frozen = chaos.frozen.filter((f) => f.color !== game.turn);
-    return moves;
+    return game.legalMoves();
   }
 
   // `drop` is set when the player dragged the piece onto its square, so it should not slide there
@@ -618,7 +589,7 @@
     const mover = game.turn;
     dealing = false;
     if (!redoing) redoStack = [];
-    clockMoved(mover, reportedClock);
+    clockMoved(mover, reportedClock, move);
     const key = advance(move);
     selected = -1;
     legal = computeLegal();
@@ -627,7 +598,10 @@
     const drafts = maybeStartDraft(DRAFT_DELAY_MS);
     render();
     // An online friend's move can arrive during a review, or while the editor has the board.
-    if (!reviewing && !editing) animateMove(move, mover, drop);
+    if (!reviewing && !editing) {
+      animateMove(move, mover, drop);
+      animatePowers(move, mover, drop);
+    }
     if (!result && !drafts && seat(game.turn) === 'computer') computerTurn();
   }
 
@@ -679,11 +653,13 @@
   }
 
   // The clocks after `mover` moves: its clock stops (at the time its own page reports, for an online
-  // friend) and gains the increment. The game's first move is free: the clocks start after it.
-  function clockMoved(mover, reported) {
+  // friend) and gains the increment, plus any chaos powerup's bonus. The game's first move is free:
+  // the clocks start after it.
+  function clockMoved(mover, reported, move) {
     if (!clock) return;
     stopClock();
-    const bonus = clock.started ? clock.inc : 0;
+    powerTime = chaos && clock.started ? Chaos.timeBonus(game, move.piece) : 0;
+    const bonus = clock.started ? clock.inc + powerTime : 0;
     if (typeof reported === 'number' && Number.isFinite(reported)) clock.left[mover] = Math.max(0, reported);
     else clock.left[mover] += bonus;
     clock.used += Math.max(0, clock.mark[mover] + bonus - clock.left[mover]);
@@ -727,13 +703,13 @@
   }, 100);
 
   // ---------------------------------------------------------------------------
-  // Chaos rounds. When a round is due (at the start, and then each time the players have used a
-  // certain amount of clock time between them) the clocks stop and each player picks one of three
-  // modifiers; then both are applied, white's first.
+  // Chaos rounds. At the start, and then every 45 seconds of play (both players' clock time
+  // together), the clocks stop and each player picks one of three powerups. A powerup belongs to a
+  // kind of piece and lasts all game, unless a later pick for the same kind swaps it out.
   // ---------------------------------------------------------------------------
 
   function chaosDue() {
-    return Boolean(chaos) && !result && chaos.round < Chaos.ROUNDS.length && clock.used >= Chaos.ROUNDS[chaos.round];
+    return Boolean(chaos) && !result && clock.used >= chaos.round * Chaos.ROUND_MS;
   }
 
   // Starts the next chaos round after `delay` if it is due, and returns whether it is. `known` holds
@@ -752,7 +728,7 @@
     const round = chaos.round, seed = gameSetup.seed;
     draft = {
       round,
-      offers: { [WHITE]: Chaos.offers(seed, round, WHITE), [BLACK]: Chaos.offers(seed, round, BLACK) },
+      offers: { [WHITE]: Chaos.offers(seed, round, WHITE, game), [BLACK]: Chaos.offers(seed, round, BLACK, game) },
       picks: {},
     };
     drafting = true;
@@ -767,9 +743,8 @@
 
   function computerPick(color) {
     return Chaos.choose(game, {
-      seed: gameSetup.seed, round: draft.round, offered: draft.offers[color], color, state: chaos,
-      clockLeft: (c) => clock.left[c],
-      // Weaker computers judge the modifiers more loosely.
+      offered: draft.offers[color], color,
+      // Weaker computers judge the powerups more loosely.
       noise: gameGm ? 0 : Math.max(0, (1800 - gameRating) / 3),
     });
   }
@@ -783,21 +758,27 @@
     showDraftCard(`Waiting for ${sideName(playerColor ^ 8)} to pick…`, []);
   }
 
+  // The three powerup cards for `color` to choose from.
   function showOffers(color) {
-    const title = mode === 'local' ? `${capitalise(sideName(color))}, pick a modifier` : 'Pick a modifier';
+    const title = mode === 'local' ? `${capitalise(sideName(color))}, pick a powerup` : 'Pick a powerup';
     const choices = draft.offers[color].map((id) => {
-      const modifier = Chaos.find(id);
+      const powerup = Chaos.find(id);
+      const held = Chaos.find(game.power[color | powerup.type]);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'draft-choice';
       const icon = document.createElement('span');
       icon.className = 'draft-icon';
-      icon.textContent = modifier.icon;
+      icon.textContent = powerup.icon;
       const name = document.createElement('strong');
-      name.textContent = modifier.name;
+      name.textContent = powerup.name + ' ';
+      const pieces = document.createElement('span');
+      pieces.className = 'draft-pieces';
+      pieces.textContent = powerup.pieces;
+      name.append(pieces);
       const text = document.createElement('span');
       text.className = 'draft-text';
-      text.textContent = modifier.text;
+      text.textContent = powerup.text + (held ? ` Replaces your ${held.icon} ${held.name}.` : '');
       button.append(icon, name, text);
       button.addEventListener('click', () => pickModifier(color, id));
       return button;
@@ -818,7 +799,7 @@
   }
 
   function showDraftCard(title, choices) {
-    document.getElementById('draft-round').textContent = `Chaos round ${draft.round + 1} of ${Chaos.ROUNDS.length}`;
+    document.getElementById('draft-round').textContent = `Chaos draft ${draft.round + 1}`;
     document.getElementById('draft-title').textContent = title;
     document.getElementById('draft-choices').replaceChildren(...choices);
     document.getElementById('draft-timer').hidden = !choices.length;
@@ -851,39 +832,37 @@
     if (!result && seat(game.turn) === 'computer') computerTurn();
   }
 
-  // Applies both picks of a round, white's first, and returns what happened.
+  // Hands out both picks of a round, white's first, and returns what happened.
   function playChaosRound(round, picks) {
-    const outcomes = [WHITE, BLACK].map((color) => {
-      const o = Chaos.apply(game, { seed: gameSetup.seed, round, picks, color, state: chaos, clockLeft: (c) => clock.left[c] });
-      for (const [c, change] of Object.entries(o.clock)) clock.left[c] = Math.max(0, clock.left[c] + change);
-      return o;
-    });
-    clock.mark = { [WHITE]: clock.left[WHITE], [BLACK]: clock.left[BLACK] };
+    const outcomes = [WHITE, BLACK].map((color) => Chaos.apply(game, color, picks[color]));
     chaos.round = round + 1;
     timeline.push({ type: 'chaos', round, picks: { [WHITE]: picks[WHITE], [BLACK]: picks[BLACK] } });
     selected = -1;
     return outcomes;
   }
 
-  // Says what each pick did, over the board, and shows it happening.
+  // Says what each side picked, over the board, and powers up the pieces it went to.
   function showChaos(outcomes) {
-    for (const o of outcomes) {
-      const label = o.mirrored && o.modifier.id !== 'mirror-both' ? `Mirror → ${o.modifier.name}` : o.pick.name;
+    for (const { color, powerup, replaced } of outcomes) {
       const item = document.createElement('li');
-      item.textContent = `${o.modifier.icon} ${capitalise(sideName(o.color))} — ${label}: ${o.text}.`;
+      const who = capitalise(sideName(color));
+      const whose = sideName(color) === 'you' ? 'your' : mode === 'local' ? `${sideName(color)}’s` : 'their';
+      item.textContent = `${powerup.icon} ${who} — ${powerup.name} for ${whose} ${powerup.pieces.toLowerCase()}` +
+        (replaced ? `, swapping out ${replaced.icon} ${replaced.name}.` : '.');
       chaosLogEl.append(item);
       setTimeout(() => item.remove(), 7000);
       if (reviewing || editing) continue;
-      for (const { sq, piece } of o.destroyed) blowUp(sq, piece);
-      for (const sq of o.spawned) {
-        const piece = squareEls[sq].querySelector('.piece');
-        if (piece) piece.animate({ scale: [0, 1.4, 1], opacity: [0, 1, 1] }, { duration: 550, easing: 'ease-out' });
+      // Every piece that gets the powerup glows, and its badge pops in.
+      for (let sq = 0; sq < 64; sq++) {
+        if (game.board[sq] !== (color | powerup.type)) continue;
+        const square = squareEls[sq];
+        square.classList.add('powering');
+        setTimeout(() => square.classList.remove('powering'), 1200);
+        const badge = square.querySelector('.power-badge');
+        if (badge) badge.animate({ scale: [0, 2.2, 1], rotate: ['-180deg', '20deg', '0deg'] }, { duration: 700, easing: 'ease-out' });
+        const piece = square.querySelector('.piece');
+        if (piece) piece.animate({ scale: [1, 1.35, 1], filter: ['none', 'brightness(2.2) drop-shadow(0 0 10px gold)', 'none'] }, { duration: 800, easing: 'ease-out' });
       }
-      for (const sq of o.changed) {
-        const piece = squareEls[sq].querySelector('.piece');
-        if (piece) piece.animate({ scale: [1.5, 1], filter: ['brightness(4)', 'none'] }, { duration: 600, easing: 'ease-out' });
-      }
-      for (const { from, to } of o.moved) slide(from, to);
     }
     while (chaosLogEl.children.length > 4) chaosLogEl.firstElementChild.remove();
   }
@@ -1178,9 +1157,12 @@
   function animateMove(move, mover, drop) {
     if (drop) {
       // The piece is already there; just let it settle from its lifted size and stop swinging.
+      // (Unless a Giant Skeleton's bomb has taken it.)
       const piece = squareEls[move.to].querySelector('.piece');
-      piece.animate({ scale: [1.25, 1] }, { duration: 180, easing: 'ease-out' });
-      settle(piece, drop.angle);
+      if (piece) {
+        piece.animate({ scale: [1.25, 1] }, { duration: 180, easing: 'ease-out' });
+        settle(piece, drop.angle);
+      }
     } else {
       slide(move.from, move.to);
     }
@@ -1216,6 +1198,132 @@
     }, delay);
   }
 
+  // ---------------------------------------------------------------------------
+  // Chaos powerups at work
+  // ---------------------------------------------------------------------------
+
+  // Whether a move is one the piece could only make thanks to its powerup.
+  function usesPower(move) {
+    const type = move.piece & 7, fromRow = move.from >> 3;
+    const dr = (move.to >> 3) - fromRow, dc = (move.to & 7) - (move.from & 7);
+    const ar = Math.abs(dr), ac = Math.abs(dc);
+    const knightJump = (ar === 1 && ac === 2) || (ar === 2 && ac === 1);
+    // Anything standing between the two squares (for pieces that fly or fire over it).
+    const overSomething = () => {
+      if (ar !== ac && ar && ac) return false;
+      const steps = Math.max(ar, ac), sr = Math.sign(dr), sc = Math.sign(dc);
+      for (let i = 1; i < steps; i++) if (game.board[move.from + i * (sr * 8 + sc)]) return true;
+      return false;
+    };
+    switch (type) {
+      case PAWN: {
+        const startRow = (move.piece & 8) === WHITE ? 6 : 1;
+        if (dc === 0) return Boolean(move.captured) || (ar === 2 && fromRow !== startRow);
+        return ar !== 1;
+      }
+      case KNIGHT: return !knightJump;
+      case BISHOP: return ar !== ac || overSomething();
+      case ROOK: return (ar !== 0 && ac !== 0) || overSomething();
+      case QUEEN: return knightJump;
+      case KING: return !(move.flags & F_CASTLE) && (ar > 1 || ac > 1);
+      default: return false;
+    }
+  }
+
+  // An icon that rises and fades over a square.
+  function iconPop(sq, icon, big = false) {
+    const square = squareEls[sq];
+    if (!square) return;
+    const box = square.getBoundingClientRect(), wrap = boardWrapEl.getBoundingClientRect();
+    const el = document.createElement('span');
+    el.className = 'power-pop' + (big ? ' big' : '');
+    el.textContent = icon;
+    el.style.left = box.left - wrap.left + box.width / 2 + 'px';
+    el.style.top = box.top - wrap.top + box.height / 2 + 'px';
+    boardWrapEl.append(el);
+    setTimeout(() => el.remove(), 1100);
+  }
+
+  // Shows what a move's powerups did: a leap in an arc for a powered move, and the blasts, zaps and
+  // summons that go off on a capture.
+  function animatePowers(move, mover, drop) {
+    if (!chaos) return;
+    const powerup = Chaos.find(game.power[move.piece]);
+    const size = boardEl.clientWidth / 8, facing = flipped ? -1 : 1;
+    const offset = (from, to) => [((from & 7) - (to & 7)) * size * facing, ((from >> 3) - (to >> 3)) * size * facing];
+
+    if (powerup && usesPower(move)) {
+      const piece = squareEls[move.to].querySelector('.piece:not(.ghost)');
+      if (piece && !drop) {
+        // Leap high over whatever is in the way.
+        const [dx, dy] = offset(move.from, move.to);
+        piece.animate([
+          { translate: `${dx}px ${dy}px`, scale: 1 },
+          { translate: `${dx / 2}px ${dy / 2 - size * 0.9}px`, scale: 1.6, offset: 0.5 },
+          { translate: '0px 0px', scale: 1 },
+        ], { duration: 520, easing: 'ease-in-out' });
+        squareEls[move.to].classList.add('moving');
+        setTimeout(() => squareEls[move.to] && squareEls[move.to].classList.remove('moving'), 540);
+      }
+      iconPop(move.to, powerup.icon);
+    }
+
+    const fx = lastFx;
+    if (fx) {
+      const skeleton = (move.captured & 7) === PAWN && game.power[move.captured] === 'giantskeleton' && fx[0] === move.to;
+      if (skeleton) {
+        // The attacker arrives, and the pawn's bomb takes it with it.
+        const ghost = pieceEl(fx[1]);
+        ghost.classList.add('ghost');
+        squareEls[move.to].append(ghost);
+        if (!drop) {
+          const [dx, dy] = offset(move.from, move.to);
+          ghost.animate({ translate: [`${dx}px ${dy}px`, '0px 0px'] }, { duration: MOVE_MS, easing: 'cubic-bezier(0.25, 0.8, 0.3, 1)' });
+        }
+        setTimeout(() => {
+          ghost.remove();
+          blowUp(move.to, fx[1]);
+          iconPop(move.to, '💣', true);
+        }, MOVE_MS + 250);
+      } else if (fx[1] === 0) {
+        // A Witch leaves a skeleton pawn behind.
+        const pawn = squareEls[fx[0]].querySelector('.piece');
+        if (pawn) pawn.animate({ scale: [0, 1.5, 1], opacity: [0, 1, 1], filter: ['brightness(3)', 'none'] }, { duration: 600, easing: 'ease-out' });
+        iconPop(fx[0], '🧹');
+      } else {
+        // A Valkyrie's spin or an Electro Wizard's zap takes out the pawns around.
+        const icon = powerup ? powerup.icon : '💥';
+        const attacker = squareEls[move.to].querySelector('.piece:not(.ghost)');
+        if (attacker) {
+          const keyframes = powerup && powerup.id === 'valkyrie'
+            ? { rotate: ['0deg', '720deg'] }
+            : { filter: ['none', 'brightness(3) drop-shadow(0 0 12px #67e8f9)', 'none', 'brightness(3) drop-shadow(0 0 12px #67e8f9)', 'none'] };
+          setTimeout(() => attacker.animate(keyframes, { duration: 600, easing: 'ease-out' }), MOVE_MS);
+        }
+        for (let i = 0; i < fx.length; i += 2) {
+          const sq = fx[i];
+          setTimeout(() => {
+            blowUp(sq, fx[i + 1]);
+            iconPop(sq, icon);
+          }, MOVE_MS + 150 + i * 40);
+        }
+      }
+    }
+
+    if (powerTime) clockBonus(mover, powerTime);
+  }
+
+  // "+3s" rising from a clock that a powerup just topped up.
+  function clockBonus(color, ms) {
+    const el = clockEls[(flipped ? WHITE : BLACK) === color ? 'top' : 'bottom'];
+    const bonus = document.createElement('span');
+    bonus.className = 'clock-bonus';
+    bonus.textContent = `+${Math.round(ms / 1000)}s`;
+    el.append(bonus);
+    setTimeout(() => bonus.remove(), 1300);
+    el.animate({ boxShadow: ['0 0 0 rgba(52, 211, 153, 0)', '0 0 24px rgba(52, 211, 153, 0.9)', '0 0 0 rgba(52, 211, 153, 0)'] }, { duration: 900 });
+  }
+
   function pop(el) {
     el.animate([
       { transform: 'scale(1)' },
@@ -1246,7 +1354,7 @@
     if (editing) return 'Set up a position: pick a piece below, then click the board.';
     if (result) return result;
     if (waiting) return waitingText;
-    if (drafting) return `Chaos round ${chaos.round + 1}! Each side picks a modifier.`;
+    if (drafting) return `Chaos draft ${chaos.round + 1}! Each side picks a powerup.`;
     const who = seat(game.turn), check = game.inCheck();
     if (who === 'computer') return `${gameGm ? gameGm.name : 'Computer'} is thinking`;
     if (who === 'friend') return `${capitalise(sideName(game.turn))} is thinking`;
@@ -1259,8 +1367,8 @@
 
   // Draws a position onto the board and returns its squares, indexed by square number. The live
   // game and the review both draw through here. `movable` is the color whose pieces can be picked up.
-  // `frozen` holds squares whose pieces are frozen in a chaos game.
-  function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1, frozen = new Set() } = {}) {
+  // Pieces with a chaos powerup (`powers`, as the engine keeps them) wear its badge.
+  function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1, powers = null } = {}) {
     const checkedKing = position.inCheck() ? position.kingSq[position.turn] : -1;
     const ordered = [];
     flipped = flip;
@@ -1280,12 +1388,19 @@
       if (targets.has(sq)) el.classList.add('target');
       if (piece) el.classList.add('occupied');
       if (piece && (piece & 8) === movable) el.classList.add('mine');
-      if (piece && frozen.has(sq)) el.classList.add('frozen');
 
       let label = squareName(sq);
       if (piece) {
         label += ', ' + ((piece & 8) === WHITE ? 'white ' : 'black ') + PIECE_NAMES[piece & 7];
         el.append(pieceEl(piece));
+        const powerup = powers && Chaos.find(powers[piece]);
+        if (powerup) {
+          label += ' with ' + powerup.name;
+          const badge = document.createElement('span');
+          badge.className = 'power-badge ' + ((piece & 8) === WHITE ? 'white' : 'black');
+          badge.textContent = powerup.icon;
+          el.append(badge);
+        }
       }
       el.setAttribute('aria-label', label);
 
@@ -1323,7 +1438,7 @@
         selected,
         targets: new Set(legal.filter((m) => m.from === selected).map((m) => m.to)),
         movable: playerCanMove() ? game.turn : -1,
-        frozen: new Set(chaos ? chaos.frozen.map((f) => f.sq) : []),
+        powers: chaos ? game.power : null,
       });
     }
     renderClocks();
@@ -1365,6 +1480,19 @@
       el.classList.toggle('running', clock.running === color);
       el.classList.toggle('low', left < LOW_TIME_MS);
       el.classList.toggle('white-side', color === WHITE);
+      // In a chaos game, the powerups that side holds.
+      let held = el.querySelector('.clock-powers');
+      if (!held) {
+        held = document.createElement('span');
+        held.className = 'clock-powers';
+        el.querySelector('.clock-name').after(held);
+      }
+      const powerups = chaos ? [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING].map((type) => Chaos.find(game.power[color | type])).filter(Boolean) : [];
+      const text = powerups.map((p) => p.icon).join(' ');
+      if (held.textContent !== text) {
+        held.textContent = text;
+        held.title = powerups.map((p) => `${p.name} (${p.pieces.toLowerCase()}): ${p.text}`).join('\n');
+      }
     }
   }
 
@@ -1374,16 +1502,8 @@
     const name = setupName(gameSetup);
     if (name) parts.push(name);
     if (chaos && !result) {
-      const at = Chaos.ROUNDS[chaos.round], total = Chaos.ROUNDS.length;
-      if (drafting) parts.push(`round ${chaos.round + 1} of ${total}`);
-      else if (at !== undefined) parts.push(`round ${chaos.round + 1} of ${total} in ${formatTime(Math.max(0, at - usedNow()))} of play`);
-      else parts.push('all rounds played');
-      for (const color of [WHITE, BLACK]) {
-        if (!chaos.rage[color]) continue;
-        const who = sideName(color);
-        parts.push(`😡 ${capitalise(who)} ${who === 'you' ? 'move' : 'moves'} twice next turn`);
-      }
-      if (chaos.frozen.length) parts.push('❄️ frozen pieces can’t move');
+      if (drafting) parts.push(`draft ${chaos.round + 1}`);
+      else parts.push(`next powerup draft in ${formatTime(Math.max(0, chaos.round * Chaos.ROUND_MS - usedNow()))} of play`);
     }
     const text = parts.join(' · ');
     gameInfoEl.hidden = !text;
@@ -1439,7 +1559,8 @@
     }
     opponentNoteEl.textContent = stockfishFailed
       ? 'Stockfish could not be loaded (offline?), so the grandmasters are playing as our own engine at 2400 for now.'
-      : `The top 10 of FIDE's ${Grandmasters.LIST_DATE} rating list, played by the Stockfish engine at a strength to match each rating (not their personal style).`;
+      : `The top 10 of FIDE's ${Grandmasters.LIST_DATE} rating list, played by the Stockfish engine at a strength to match each rating (not their personal style).` +
+        (variant === 'chaos' ? ' Stockfish doesn’t know chaos powerups, so in Chaos games they are played by our own engine at full strength.' : '');
   }
 
   // Picking an opponent starts a game against them.

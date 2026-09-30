@@ -34,8 +34,43 @@
       return String.fromCharCode(97 + (sq & 7)) + (8 - (sq >> 3));
     }
 
+    // Chaos-mode powerups the rules know about: which kind of piece each belongs to, and roughly what
+    // it adds to every such piece, in centipawns (for the computer's judgement). The names and
+    // descriptions live in chaos.js.
+    const POWERS = {
+      hog: { type: PAWN, worth: 15 },           // pawns may step two squares from anywhere
+      barbarian: { type: PAWN, worth: 25 },     // pawns may also take straight ahead
+      recruits: { type: PAWN, worth: 12 },      // pawns may also step one square sideways
+      spear: { type: PAWN, worth: 25 },         // pawns may also take two squares diagonally
+      giantskeleton: { type: PAWN, worth: 20 }, // a pawn that is taken destroys the piece that took it
+      collector: { type: PAWN, worth: 0 },      // pawn moves add time (the page's clocks see to it)
+      megaknight: { type: KNIGHT, worth: 120 }, // knights also move like a king
+      bandit: { type: KNIGHT, worth: 80 },      // knights also jump two squares straight
+      darkprince: { type: KNIGHT, worth: 30 },  // pawns cannot take knights
+      balloon: { type: BISHOP, worth: 100 },    // bishops fly over the first piece in their way
+      icewizard: { type: BISHOP, worth: 120 },  // bishops also step one square straight
+      guards: { type: BISHOP, worth: 30 },      // pawns cannot take bishops
+      cannon: { type: ROOK, worth: 120 },       // rooks also take by jumping over one piece
+      royalgiant: { type: ROOK, worth: 90 },    // rooks also step one square diagonally
+      ramrider: { type: ROOK, worth: 300 },     // rooks also jump like a knight
+      valkyrie: { type: ROOK, worth: 60 },      // a rook that takes also destroys enemy pawns around it
+      archerqueen: { type: QUEEN, worth: 300 }, // the queen also jumps like a knight
+      electro: { type: QUEEN, worth: 60 },      // a queen that takes also destroys enemy pawns around it
+      witch: { type: QUEEN, worth: 60 },        // a queen that takes leaves a pawn where she came from
+      monk: { type: KING, worth: 0 },           // the king also jumps like a knight
+      skeletonking: { type: KING, worth: 0 },   // the king also steps two squares, over an empty one
+      pump: { type: KING, worth: 0 },           // every move adds time (the page's clocks see to it)
+    };
+    const DOUBLE_STEPS = [[-2, 0], [2, 0], [0, -2], [0, 2]];
+    const SHIELDS = new Set(['darkprince', 'guards']);   // the pieces with these cannot be taken by pawns
+
     class Game {
       constructor(fen) {
+        // The powerup of each kind of piece (an id from POWERS, or ''), indexed by piece (color | type).
+        this.power = new Array(16).fill('');
+        this.powerWorth = new Array(16).fill(0);
+        // What powerups did on the last move made: [square, piece there before, ...], or 0.
+        this.lastFx = 0;
         this.load(fen || START_FEN);
       }
 
@@ -62,7 +97,14 @@
         this.undoStack = [];
       }
 
+      // Gives a kind of piece (color | type) a powerup, replacing any it had; '' takes it away.
+      setPower(piece, id) {
+        this.power[piece] = POWERS[id] ? id : '';
+        this.powerWorth[piece] = POWERS[id] ? POWERS[id].worth : 0;
+      }
+
       // The position in Forsyth-Edwards Notation, the usual text form that other engines read.
+      // (Powerups have no place in it.)
       fen() {
         const rows = [];
         for (let r = 0; r < 8; r++) {
@@ -84,42 +126,85 @@
 
       // Identifies a position for the threefold repetition rule.
       key() {
-        return this.board.join(',') + '|' + this.turn + '|' + this.castling + '|' + this.ep;
+        return this.board.join(',') + '|' + this.turn + '|' + this.castling + '|' + this.ep + '|' + this.power.join(',');
       }
 
       attacked(sq, by) {
-        const b = this.board, r = sq >> 3, c = sq & 7;
-        const pawnRow = by === WHITE ? r + 1 : r - 1;
+        const b = this.board, pw = this.power, r = sq >> 3, c = sq & 7;
+        const pawn = by | PAWN, knight = by | KNIGHT, bishop = by | BISHOP, rook = by | ROOK, queen = by | QUEEN, king = by | KING;
+
+        // Pawns attack from the row behind (from their point of view).
+        const back = by === WHITE ? 1 : -1, pawnRow = r + back;
         if (pawnRow >= 0 && pawnRow < 8) {
-          if (c > 0 && b[pawnRow * 8 + c - 1] === (by | PAWN)) return true;
-          if (c < 7 && b[pawnRow * 8 + c + 1] === (by | PAWN)) return true;
+          if (c > 0 && b[pawnRow * 8 + c - 1] === pawn) return true;
+          if (c < 7 && b[pawnRow * 8 + c + 1] === pawn) return true;
+          if (pw[pawn] === 'barbarian' && b[pawnRow * 8 + c] === pawn) return true;
+          const farRow = r + 2 * back;
+          if (pw[pawn] === 'spear' && farRow >= 0 && farRow < 8) {
+            if (c > 1 && b[farRow * 8 + c - 2] === pawn && !b[pawnRow * 8 + c - 1]) return true;
+            if (c < 6 && b[farRow * 8 + c + 2] === pawn && !b[pawnRow * 8 + c + 1]) return true;
+          }
         }
+
+        const rookLeaps = pw[rook] === 'ramrider', queenLeaps = pw[queen] === 'archerqueen', kingLeaps = pw[king] === 'monk';
         for (const [dr, dc] of KNIGHT_STEPS) {
           const nr = r + dr, nc = c + dc;
-          if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && b[nr * 8 + nc] === (by | KNIGHT)) return true;
+          if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+          const p = b[nr * 8 + nc];
+          if (p === knight || (rookLeaps && p === rook) || (queenLeaps && p === queen) || (kingLeaps && p === king)) return true;
         }
+
+        const knightSteps = pw[knight] === 'megaknight', bishopSteps = pw[bishop] === 'icewizard', rookSteps = pw[rook] === 'royalgiant';
         for (const [dr, dc] of KING_STEPS) {
           const nr = r + dr, nc = c + dc;
-          if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && b[nr * 8 + nc] === (by | KING)) return true;
+          if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+          const p = b[nr * 8 + nc];
+          if (p === king || (knightSteps && p === knight)) return true;
+          if (dr && dc ? rookSteps && p === rook : bishopSteps && p === bishop) return true;
         }
+
+        // Two squares away: a Bandit knight's dash, or a Skeleton King's stride over an empty square.
+        const bandit = pw[knight] === 'bandit', skeleton = pw[king] === 'skeletonking';
+        if (bandit || skeleton) {
+          for (const [dr, dc] of KING_STEPS) {
+            const nr = r + 2 * dr, nc = c + 2 * dc;
+            if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+            const p = b[nr * 8 + nc];
+            if (bandit && p === knight && !(dr && dc)) return true;
+            if (skeleton && p === king && !b[(r + dr) * 8 + c + dc]) return true;
+          }
+        }
+
+        // Lines. A Balloon bishop flies over one piece; a Cannon rook takes over one.
+        const balloon = pw[bishop] === 'balloon', cannon = pw[rook] === 'cannon';
         for (const [dr, dc] of DIAGONALS) {
-          let nr = r + dr, nc = c + dc;
+          let nr = r + dr, nc = c + dc, screened = false;
           while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
             const p = b[nr * 8 + nc];
             if (p) {
-              if (p === (by | BISHOP) || p === (by | QUEEN)) return true;
-              break;
+              if (screened) {
+                if (p === bishop) return true;
+                break;
+              }
+              if (p === bishop || p === queen) return true;
+              if (!balloon) break;
+              screened = true;
             }
             nr += dr; nc += dc;
           }
         }
         for (const [dr, dc] of STRAIGHTS) {
-          let nr = r + dr, nc = c + dc;
+          let nr = r + dr, nc = c + dc, screened = false;
           while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
             const p = b[nr * 8 + nc];
             if (p) {
-              if (p === (by | ROOK) || p === (by | QUEEN)) return true;
-              break;
+              if (screened) {
+                if (p === rook) return true;
+                break;
+              }
+              if (p === rook || p === queen) return true;
+              if (!cannon) break;
+              screened = true;
             }
             nr += dr; nc += dc;
           }
@@ -131,28 +216,57 @@
         return this.attacked(this.kingSq[color], color ^ 8);
       }
 
-      // Moves that follow piece movement rules but may leave the mover's king in check.
-      // With capturesOnly, returns just captures and queen promotions (used by the search).
+      // Moves that follow piece movement rules (powerups included) but may leave the mover's king in
+      // check. With capturesOnly, returns just captures and queen promotions (used by the search).
       pseudoMoves(capturesOnly) {
-        const b = this.board, us = this.turn, them = us ^ 8;
+        const b = this.board, pw = this.power, us = this.turn, them = us ^ 8;
         const moves = [];
         const add = (from, to, piece, captured, promo, flags) => {
           moves.push({ from, to, piece, captured, promo, flags });
         };
+        // A jump to one square: a quiet move if it is empty, a capture if an enemy stands there.
+        const leap = (from, piece, nr, nc) => {
+          if (nr < 0 || nr > 7 || nc < 0 || nc > 7) return;
+          const to = nr * 8 + nc, target = b[to];
+          if (target === 0) {
+            if (!capturesOnly) add(from, to, piece, 0, 0, 0);
+          } else if ((target & 8) === them) {
+            add(from, to, piece, target, 0, 0);
+          }
+        };
+        // Pawns cannot take a shielded piece.
+        const pawnCanTake = (target) => target !== 0 && (target & 8) === them && !SHIELDS.has(pw[target]);
+
+        // Castling comes first, so that a Skeleton King's stride never doubles up with it.
+        const castles = [];
+        const home = us === WHITE ? 60 : 4;
+        if (!capturesOnly) {
+          const kingSide = us === WHITE ? 1 : 4, queenSide = us === WHITE ? 2 : 8;
+          if (this.kingSq[us] === home && (this.castling & (kingSide | queenSide)) && !this.attacked(home, them)) {
+            if ((this.castling & kingSide) && b[home + 1] === 0 && b[home + 2] === 0 && b[home + 3] === (us | ROOK) &&
+                !this.attacked(home + 1, them) && !this.attacked(home + 2, them)) {
+              castles.push({ from: home, to: home + 2, piece: us | KING, captured: 0, promo: 0, flags: F_CASTLE });
+            }
+            if ((this.castling & queenSide) && b[home - 1] === 0 && b[home - 2] === 0 && b[home - 3] === 0 &&
+                b[home - 4] === (us | ROOK) && !this.attacked(home - 1, them) && !this.attacked(home - 2, them)) {
+              castles.push({ from: home, to: home - 2, piece: us | KING, captured: 0, promo: 0, flags: F_CASTLE });
+            }
+          }
+        }
 
         for (let sq = 0; sq < 64; sq++) {
           const piece = b[sq];
           if (!piece || (piece & 8) !== us) continue;
-          const r = sq >> 3, c = sq & 7, type = piece & 7;
+          const r = sq >> 3, c = sq & 7, type = piece & 7, power = pw[piece];
 
           if (type === PAWN) {
             const dir = us === WHITE ? -1 : 1;
             const startRow = us === WHITE ? 6 : 1, promoRow = us === WHITE ? 0 : 7;
             const nr = r + dir;
             const addPawnMove = (to, captured) => {
-              if (nr === promoRow) {
+              if (to >> 3 === promoRow) {
                 for (const promo of capturesOnly ? [QUEEN] : PROMOTIONS) add(sq, to, piece, captured, promo, 0);
-              } else {
+              } else if (captured || !capturesOnly) {
                 add(sq, to, piece, captured, 0, 0);
               }
             };
@@ -162,60 +276,67 @@
                 addPawnMove(ahead, 0);
               } else if (!capturesOnly) {
                 add(sq, ahead, piece, 0, 0, 0);
-                if (r === startRow && b[ahead + dir * 8] === 0) add(sq, ahead + dir * 8, piece, 0, 0, F_DOUBLE);
+                const farRow = nr + dir;
+                if ((r === startRow || power === 'hog') && farRow >= 0 && farRow <= 7 && farRow !== promoRow && b[ahead + dir * 8] === 0) {
+                  add(sq, ahead + dir * 8, piece, 0, 0, F_DOUBLE);
+                }
               }
+            } else if (power === 'barbarian' && pawnCanTake(b[ahead])) {
+              addPawnMove(ahead, b[ahead]);
             }
             for (const dc of [-1, 1]) {
               const nc = c + dc;
               if (nc < 0 || nc > 7) continue;
               const to = nr * 8 + nc, target = b[to];
-              if (target && (target & 8) === them) addPawnMove(to, target);
-              else if (to === this.ep) add(sq, to, piece, them | PAWN, 0, F_EP);
+              if (pawnCanTake(target)) addPawnMove(to, target);
+              else if (to === this.ep && !target) add(sq, to, piece, them | PAWN, 0, F_EP);
+              const farRow = r + 2 * dir, farCol = c + 2 * dc;
+              if (power === 'spear' && farRow >= 0 && farRow <= 7 && farCol >= 0 && farCol <= 7 && !target &&
+                  pawnCanTake(b[farRow * 8 + farCol])) {
+                addPawnMove(farRow * 8 + farCol, b[farRow * 8 + farCol]);
+              }
+              if (power === 'recruits' && !capturesOnly && b[r * 8 + nc] === 0) add(sq, r * 8 + nc, piece, 0, 0, 0);
             }
-          } else if (type === KNIGHT || type === KING) {
-            for (const [dr, dc] of type === KNIGHT ? KNIGHT_STEPS : KING_STEPS) {
-              const nr = r + dr, nc = c + dc;
-              if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
-              const to = nr * 8 + nc, target = b[to];
-              if (target === 0) {
-                if (!capturesOnly) add(sq, to, piece, 0, 0, 0);
-              } else if ((target & 8) === them) {
-                add(sq, to, piece, target, 0, 0);
+          } else if (type === KNIGHT) {
+            for (const [dr, dc] of KNIGHT_STEPS) leap(sq, piece, r + dr, c + dc);
+            if (power === 'megaknight') for (const [dr, dc] of KING_STEPS) leap(sq, piece, r + dr, c + dc);
+            if (power === 'bandit') for (const [dr, dc] of DOUBLE_STEPS) leap(sq, piece, r + dr, c + dc);
+          } else if (type === KING) {
+            for (const [dr, dc] of KING_STEPS) leap(sq, piece, r + dr, c + dc);
+            if (power === 'monk') for (const [dr, dc] of KNIGHT_STEPS) leap(sq, piece, r + dr, c + dc);
+            if (power === 'skeletonking') {
+              for (const [dr, dc] of KING_STEPS) {
+                const mr = r + dr, mc = c + dc, nr = r + 2 * dr, nc = c + 2 * dc;
+                if (nr < 0 || nr > 7 || nc < 0 || nc > 7 || b[mr * 8 + mc]) continue;
+                if (castles.some((m) => m.from === sq && m.to === nr * 8 + nc)) continue;
+                leap(sq, piece, nr, nc);
               }
             }
           } else {
             const dirs = type === BISHOP ? DIAGONALS : type === ROOK ? STRAIGHTS : KING_STEPS;
+            // A Balloon flies on past the first piece in its way; a Cannon can only take beyond it.
+            const hop = type === BISHOP && power === 'balloon' ? 'fly' : type === ROOK && power === 'cannon' ? 'cannon' : '';
             for (const [dr, dc] of dirs) {
-              let nr = r + dr, nc = c + dc;
+              let nr = r + dr, nc = c + dc, jumped = false;
               while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
                 const to = nr * 8 + nc, target = b[to];
                 if (target === 0) {
-                  if (!capturesOnly) add(sq, to, piece, 0, 0, 0);
+                  if (!capturesOnly && (!jumped || hop === 'fly')) add(sq, to, piece, 0, 0, 0);
                 } else {
                   if ((target & 8) === them) add(sq, to, piece, target, 0, 0);
-                  break;
+                  if (!hop || jumped) break;
+                  jumped = true;
                 }
                 nr += dr; nc += dc;
               }
             }
+            if (type === BISHOP && power === 'icewizard') for (const [dr, dc] of STRAIGHTS) leap(sq, piece, r + dr, c + dc);
+            if (type === ROOK && power === 'royalgiant') for (const [dr, dc] of DIAGONALS) leap(sq, piece, r + dr, c + dc);
+            if (type === ROOK && power === 'ramrider') for (const [dr, dc] of KNIGHT_STEPS) leap(sq, piece, r + dr, c + dc);
+            if (type === QUEEN && power === 'archerqueen') for (const [dr, dc] of KNIGHT_STEPS) leap(sq, piece, r + dr, c + dc);
           }
         }
-
-        if (!capturesOnly) {
-          const home = us === WHITE ? 60 : 4;
-          const kingSide = us === WHITE ? 1 : 4, queenSide = us === WHITE ? 2 : 8;
-          if (this.kingSq[us] === home && (this.castling & (kingSide | queenSide)) && !this.attacked(home, them)) {
-            if ((this.castling & kingSide) && b[home + 1] === 0 && b[home + 2] === 0 && b[home + 3] === (us | ROOK) &&
-                !this.attacked(home + 1, them) && !this.attacked(home + 2, them)) {
-              add(home, home + 2, us | KING, 0, 0, F_CASTLE);
-            }
-            if ((this.castling & queenSide) && b[home - 1] === 0 && b[home - 2] === 0 && b[home - 3] === 0 &&
-                b[home - 4] === (us | ROOK) && !this.attacked(home - 1, them) && !this.attacked(home - 2, them)) {
-              add(home, home - 2, us | KING, 0, 0, F_CASTLE);
-            }
-          }
-        }
-        return moves;
+        return castles.length ? moves.concat(castles) : moves;
       }
 
       legalMoves() {
@@ -229,7 +350,7 @@
       }
 
       make(m) {
-        const b = this.board, us = this.turn;
+        const b = this.board, us = this.turn, pw = this.power;
         this.undoStack.push(this.castling, this.ep, this.halfmove);
         b[m.from] = 0;
         b[m.to] = m.promo ? us | m.promo : m.piece;
@@ -245,10 +366,39 @@
         this.halfmove = (m.piece & 7) === PAWN || m.captured ? 0 : this.halfmove + 1;
         if (us === BLACK) this.fullmove++;
         this.turn = us ^ 8;
+
+        // Powerups that go off when something is taken.
+        let fx = 0;
+        if (m.captured) {
+          const power = pw[m.piece];
+          if ((m.captured & 7) === PAWN && pw[m.captured] === 'giantskeleton' && (m.piece & 7) !== KING) {
+            // The pawn's bomb takes the piece that took it.
+            fx = [m.to, b[m.to]];
+            b[m.to] = 0;
+          } else if (power === 'valkyrie' || power === 'electro') {
+            for (const [dr, dc] of KING_STEPS) {
+              const nr = (m.to >> 3) + dr, nc = (m.to & 7) + dc;
+              if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+              const n = nr * 8 + nc;
+              if (b[n] === ((us ^ 8) | PAWN)) {
+                (fx || (fx = [])).push(n, b[n]);
+                b[n] = 0;
+              }
+            }
+          } else if (power === 'witch' && (m.from >> 3) !== 0 && (m.from >> 3) !== 7 && !b[m.from]) {
+            fx = [m.from, 0];
+            b[m.from] = us | PAWN;
+          }
+        }
+        this.lastFx = fx;
+        this.undoStack.push(fx);
       }
 
       undo(m) {
-        const b = this.board, us = this.turn ^ 8;
+        const b = this.board;
+        const fx = this.undoStack.pop();
+        if (fx) for (let i = fx.length - 2; i >= 0; i -= 2) b[fx[i]] = fx[i + 1];
+        const us = this.turn ^ 8;
         this.turn = us;
         if (us === BLACK) this.fullmove--;
         this.halfmove = this.undoStack.pop();
@@ -280,6 +430,10 @@
             if (((sq >> 3) + (sq & 7)) % 2 === 0) lightBishops++; else darkBishops++;
           }
         }
+        // Powered-up minor pieces may well be able to mate, so only plain ones count as too few.
+        if ((knights && this.power.some((id, piece) => id && (piece & 7) === KNIGHT)) ||
+            (lightBishops + darkBishops && this.power.some((id, piece) => id && (piece & 7) === BISHOP)) ||
+            this.power.some((id, piece) => id && (piece & 7) === KING && id !== 'pump')) return false;
         if (knights === 0) return lightBishops === 0 || darkBishops === 0;
         return knights === 1 && lightBishops + darkBishops === 0;
       }
@@ -288,12 +442,15 @@
       snapshot() {
         return {
           board: this.board.slice(), kingSq: this.kingSq.slice(), turn: this.turn, castling: this.castling,
-          ep: this.ep, halfmove: this.halfmove, fullmove: this.fullmove,
+          ep: this.ep, halfmove: this.halfmove, fullmove: this.fullmove, power: this.power.slice(),
         };
       }
 
       static restore(state) {
-        return Object.assign(new Game(), state);
+        const { power, ...rest } = state;
+        const g = Object.assign(new Game(), rest);
+        if (power) power.forEach((id, piece) => g.setPower(piece, id));
+        return g;
       }
 
       perft(depth) {
@@ -400,10 +557,10 @@
         if (type !== PAWN) nonPawnMaterial += VALUE[type];
         if ((piece & 8) === WHITE) {
           whiteMaterial += VALUE[type];
-          score += VALUE[type] + PST[type][sq];
+          score += VALUE[type] + PST[type][sq] + g.powerWorth[piece];
         } else {
           blackMaterial += VALUE[type];
-          score -= VALUE[type] + PST[type][sq ^ 56];
+          score -= VALUE[type] + PST[type][sq ^ 56] + g.powerWorth[piece];
         }
       }
 
@@ -643,7 +800,7 @@
     }
 
     return {
-      Game, chooseMove, analyse, moveToSan, moveToUci, sameMove, evaluate, squareName, squareIndex, START_FEN, MATE,
+      Game, POWERS, chooseMove, analyse, moveToSan, moveToUci, sameMove, evaluate, squareName, squareIndex, START_FEN, MATE,
       MIN_RATING, MAX_RATING,
       WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, F_EP, F_CASTLE,
     };

@@ -1599,6 +1599,7 @@ main:not([data-variant="custom"]) #edit-position {
 /* ---------- Clocks ---------- */
 
 .clock {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1785,23 +1786,6 @@ main.reviewing .chaos-log {
   display: none;
 }
 
-/* A frozen piece sits in ice. */
-.square.frozen::before {
-  content: "";
-  position: absolute;
-  inset: 6%;
-  z-index: 0;
-  border: 2px solid rgba(165, 243, 252, 0.9);
-  border-radius: 8px;
-  background: radial-gradient(circle, rgba(165, 243, 252, 0.15), rgba(103, 232, 249, 0.45));
-  box-shadow: 0 0 12px rgba(103, 232, 249, 0.7), inset 0 0 10px rgba(255, 255, 255, 0.5);
-  pointer-events: none;
-}
-
-.square.frozen .piece {
-  filter: saturate(0.4) brightness(1.2) drop-shadow(0 0 4px rgba(103, 232, 249, 0.9));
-}
-
 /* ---------- Position editor ---------- */
 
 .setup {
@@ -1913,4 +1897,104 @@ main.editing .controls,
 main.editing .clock,
 main.editing .game-info {
   display: none;
+}
+
+/* ---------- Chaos powerups ---------- */
+
+.draft-pieces {
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.18);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gold);
+  vertical-align: 2px;
+}
+
+/* A powered-up piece wears its powerup's badge in the corner of its square. */
+.power-badge {
+  position: absolute;
+  top: 3%;
+  right: 4%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 38%;
+  height: 38%;
+  border-radius: 50%;
+  font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji", sans-serif;
+  font-size: calc(var(--square) * 0.2);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.power-badge.white {
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.55), rgba(34, 211, 238, 0.1) 70%);
+}
+
+.power-badge.black {
+  background: radial-gradient(circle, rgba(244, 114, 182, 0.55), rgba(244, 114, 182, 0.1) 70%);
+}
+
+main.reviewing .power-badge {
+  display: none;
+}
+
+/* The pieces that just got a powerup. */
+.square.powering {
+  box-shadow: inset 0 0 0 3px var(--gold), inset 0 0 22px rgba(251, 191, 36, 0.8);
+  transition: box-shadow 0.3s ease;
+}
+
+/* An icon rising off a square when a powerup goes off. */
+.power-pop {
+  position: absolute;
+  z-index: 6;
+  font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji", sans-serif;
+  font-size: calc(var(--square) * 0.55);
+  line-height: 1;
+  pointer-events: none;
+  translate: -50% -50%;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.6));
+  animation: power-pop 1s ease-out forwards;
+}
+
+.power-pop.big {
+  font-size: calc(var(--square) * 0.9);
+}
+
+@keyframes power-pop {
+  0% { opacity: 0; transform: scale(0.3); }
+  25% { opacity: 1; transform: scale(1.3); }
+  100% { opacity: 0; transform: translateY(calc(var(--square) * -0.9)) scale(1); }
+}
+
+/* The powerups each side holds, beside its name on the clock. */
+.clock-powers {
+  flex: 1;
+  overflow: hidden;
+  font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji", sans-serif;
+  font-size: 1rem;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.clock-bonus {
+  position: absolute;
+  right: 12px;
+  top: -6px;
+  font-weight: 800;
+  color: #34d399;
+  text-shadow: 0 0 10px rgba(52, 211, 153, 0.8);
+  pointer-events: none;
+  animation: clock-bonus 1.2s ease-out forwards;
+}
+
+@keyframes clock-bonus {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-24px); }
 }
