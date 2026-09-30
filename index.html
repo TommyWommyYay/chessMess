@@ -46,6 +46,7 @@
           <div class="overlay-card">
             <h2 id="game-over-title"></h2>
             <p id="game-over-text"></p>
+            <p id="game-over-rating" class="game-over-rating" hidden></p>
             <div class="overlay-actions">
               <button id="play-again" type="button" class="primary">Play again</button>
               <button id="review-game" type="button">Review game</button>
@@ -88,6 +89,15 @@
       <div id="online-actions" class="online-actions"></div>
     </section>
 
+    <section id="chat" class="chat" aria-label="Chat" hidden>
+      <ol id="chat-log" class="chat-log" aria-live="polite"></ol>
+      <div id="emotes" class="emotes"></div>
+      <form id="chat-form" class="chat-form">
+        <input id="chat-input" maxlength="200" placeholder="Say something…" autocomplete="off" aria-label="Chat message">
+        <button type="submit">Send</button>
+      </form>
+    </section>
+
     <section class="controls">
       <div class="controls-row">
         <label>Opponent
@@ -97,19 +107,31 @@
             <option value="online">Friend, online</option>
           </select>
         </label>
-        <label id="difficulty-field">Difficulty
-          <select id="difficulty">
-            <option value="easy">Easy</option>
-            <option value="medium">Medium</option>
-            <option value="hard">Hard</option>
-          </select>
-        </label>
         <label id="side-field">Play as
           <select id="side">
             <option value="white">White</option>
             <option value="black">Black</option>
           </select>
         </label>
+        <label id="name-field">Your name
+          <input id="name" maxlength="20" placeholder="You" autocomplete="nickname" spellcheck="false">
+        </label>
+        <label id="white-name-field">White
+          <input id="white-name" maxlength="20" placeholder="White" spellcheck="false">
+        </label>
+        <label id="black-name-field">Black
+          <input id="black-name" maxlength="20" placeholder="Black" spellcheck="false">
+        </label>
+      </div>
+      <div id="rating-field" class="controls-row rating-row">
+        <label class="rating-slider">Computer rating
+          <input id="rating" type="range" min="400" max="2400" step="100" value="1200">
+        </label>
+        <p class="rating-readout">
+          <strong id="rating-value">1200</strong>
+          <span id="rating-name"></span>
+        </p>
+        <p class="my-rating">Your rating <strong id="my-rating">1200</strong></p>
       </div>
       <div class="controls-row">
         <button id="new-game" type="button" class="primary">New game</button>

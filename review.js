@@ -184,9 +184,12 @@
     evalBarEl.classList.toggle('flipped', review.flip);
     const fullMoves = Math.ceil(moves.length / 2);
     const opponent = record.opponent || 'computer';
-    const against = { computer: `against the ${record.level} computer`, online: 'against your friend', local: 'on one screen' }[opponent];
+    // Older games saved the computer's level as easy/medium/hard rather than a rating.
+    const computer = typeof record.level === 'number' ? `the ${record.level}-rated computer` : `the ${record.level} computer`;
+    const friendName = record.names && record.names[1] !== 'Friend' ? record.names[1] : 'your friend';
+    const against = { computer: `against ${computer}`, online: `against ${friendName}`, local: 'on one screen' }[opponent];
     resultEl.textContent = `${record.result} ${fullMoves} ${fullMoves === 1 ? 'move' : 'moves'} ${against}.`;
-    [review.firstName, review.secondName] = SIDES[opponent];
+    [review.firstName, review.secondName] = record.names || SIDES[opponent];
     buildMoveList();
     show(0);
     refresh();

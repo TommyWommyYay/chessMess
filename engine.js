@@ -495,30 +495,43 @@
       return list;
     }
 
-    // level: 'easy' | 'medium' | 'hard'
-    function chooseMove(g, level, seen) {
+    const MIN_RATING = 400, MAX_RATING = 2400;
+
+    // How the computer plays at a given rating. The ratings are rough labels rather than measured
+    // strengths: weaker settings look less far ahead, misjudge positions (random noise added to
+    // each move's score) and now and then play a move at random; stronger ones search properly,
+    // for longer the higher they go.
+    function playingStyle(rating) {
+      const r = Math.min(MAX_RATING, Math.max(MIN_RATING, Number(rating) || 1200));
+      return {
+        randomMove: r < 1400 ? 0.45 * (1400 - r) / 1000 : 0,
+        noise: r < 1700 ? (1900 - r) * 0.2 : 0,
+        depth: r < 900 ? 1 : r < 1300 ? 2 : 3,
+        // At 1700 and above: iterative deepening for this long.
+        thinkMs: r >= 1700 ? 300 + (r - 1700) * 3 : 0,
+      };
+    }
+
+    function chooseMove(g, rating, seen) {
       // Shuffled first so that equally good moves are not always played in the same order.
       const moves = orderMoves(shuffle(g.legalMoves()));
       if (!moves.length) return null;
       const ctx = { nodes: 0, stop: false, deadline: Infinity };
+      const style = playingStyle(rating);
 
-      if (level === 'easy') {
-        // Mostly random, but now and then it grabs the best immediate capture.
-        if (Math.random() < 0.7) return moves[Math.floor(Math.random() * moves.length)];
-        return best(searchRoot(g, moves, 1, ctx, seen, false)).move;
-      }
+      if (Math.random() < style.randomMove) return moves[Math.floor(Math.random() * moves.length)];
 
-      if (level === 'medium') {
-        // Looks two moves ahead, with a little noise so it does not always find the best move.
-        const scored = searchRoot(g, moves, 2, ctx, seen, true);
-        for (const s of scored) s.score += Math.random() * 30;
+      if (!style.thinkMs) {
+        // Every move gets its true score so that the noise decides between them fairly.
+        const scored = searchRoot(g, moves, style.depth, ctx, seen, true);
+        for (const s of scored) s.score += (Math.random() - 0.5) * 2 * style.noise;
         return best(scored).move;
       }
 
-      // Hard: search as deep as it can within the time budget.
-      ctx.deadline = Date.now() + 1200;
+      // Search as deep as it can within the time budget.
+      ctx.deadline = Date.now() + style.thinkMs;
       let choice = moves[0];
-      for (let depth = 1; depth <= 6; depth++) {
+      for (let depth = 1; depth <= 8; depth++) {
         const scored = searchRoot(g, moves, depth, ctx, seen, false);
         if (!scored) break;
         const top = best(scored);
@@ -601,6 +614,7 @@
 
     return {
       Game, chooseMove, analyse, moveToSan, sameMove, evaluate, squareName, squareIndex, START_FEN, MATE,
+      MIN_RATING, MAX_RATING,
       WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, F_EP, F_CASTLE,
     };
   }
@@ -608,10 +622,10 @@
   // Runs inside a Web Worker so the page stays smooth while the computer thinks or reviews a game.
   function workerMain(Chess) {
     self.onmessage = (event) => {
-      const { id, type, state, level, seen, played } = event.data;
+      const { id, type, state, rating, seen, played } = event.data;
       const game = Chess.Game.restore(state);
       if (type === 'analyse') self.postMessage({ id, analysis: Chess.analyse(game, played) });
-      else self.postMessage({ id, move: Chess.chooseMove(game, level, new Map(seen)) });
+      else self.postMessage({ id, move: Chess.chooseMove(game, rating, new Map(seen)) });
     };
   }
 

@@ -21,10 +21,19 @@
   // A closed laptop or a dropped connection does not announce itself, so both sides send a ping now
   // and then and give up on a friend they have not heard from for a while.
   const PING_MS = 4000, TIMEOUT_MS = 15000;
+  const NAME_LENGTH = 20, CHAT_LENGTH = 200, CHAT_KEPT = 100;
+  const EMOTES = ['👍', '😂', '😮', '😬', '😭', '🔥', '👏', '🤝'];
+  const QUICK_LINES = ['Good luck!', 'Nice move!', 'Oops!', 'Good game!'];
 
   const panelEl = document.getElementById('online');
   const textEl = document.getElementById('online-text');
   const actionsEl = document.getElementById('online-actions');
+  const chatEl = document.getElementById('chat');
+  const chatLogEl = document.getElementById('chat-log');
+  const chatFormEl = document.getElementById('chat-form');
+  const chatInputEl = document.getElementById('chat-input');
+  const emotesEl = document.getElementById('emotes');
+  const boardWrapEl = document.getElementById('board-wrap');
 
   let hooks = null;         // callbacks into the game (see open() at the bottom)
   let client = null;        // the connection to the broker
@@ -33,6 +42,7 @@
   let code = null;
   let me = null;            // this player's id in messages
   let friend = null;        // the friend's id, while they are connected
+  let friendName = '';
   let run = null;           // new on every connection, so a refreshed page starts counting afresh
   let seq = 0;              // numbers this player's messages, so repeats can be spotted
   let seen = { sender: null, seq: 0 };
@@ -89,6 +99,16 @@
   }
 
   const topic = (sender) => TOPIC_PREFIX + code + '/' + sender;
+
+  const cleanName = (text) => String(text || '').replace(/\s+/g, ' ').trim().slice(0, NAME_LENGTH);
+  // How the panel refers to the friend, at the start of a sentence or in the middle of one.
+  const Them = () => friendName || 'Your friend';
+  const them = () => friendName || 'your friend';
+
+  function setFriendName(name) {
+    friendName = cleanName(name);
+    hooks.friendName(friendName);
+  }
 
   // Every message carries its sender, and its recipient (none for a guest's hello).
   function send(message, recipient = friend) {
@@ -162,7 +182,7 @@
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') joinButton.click();
     });
-    show(note || 'Create a game and send your friend the link, or type in the code your friend sent you.',
+    show(note || 'Set your name below, then create a game and send your friend the link, or type in the code your friend sent you.',
       button('Create game', host, true), input, joinButton);
     hooks.wait('Create a game or join one below.');
   }
@@ -197,16 +217,17 @@
 
   function playing(note) {
     if (over) return gameOver();
-    show([note ? note + ' ' : '', 'Playing online, game ', strong(code), '.'],
+    showChat(true);
+    show([note ? note + ' ' : '', `Playing online against ${them()}, game `, strong(code), '.'],
       button('Offer draw', offerDraw), leaveButton());
   }
 
   function gameOver() {
     over = true;
     if (rematch.me) {
-      show('Waiting for your friend to accept the rematch…', leaveButton());
+      show(`Waiting for ${them()} to accept the rematch…`, leaveButton());
     } else {
-      show(rematch.them ? 'Your friend wants a rematch.' : 'Game over. Fancy another?',
+      show(rematch.them ? `${Them()} wants a rematch.` : 'Game over. Fancy another?',
         button('Rematch', requestRematch, true), leaveButton());
     }
   }
@@ -268,7 +289,7 @@
     if (!await connect(current)) return;
     client.subscribe(topic('host'), { qos: 1 }, () => {
       if (current !== session) return;
-      send({ type: 'hello' });
+      send({ type: 'hello', name: hooks.myName() });
       joinTimer = setTimeout(() => {
         if (current === session && !friend) {
           fail(`Could not find game ${code}. Check the code, and that your friend still has the game open (with the link showing).`);
@@ -292,11 +313,13 @@
     clearInterval(pinger);
     if (role === 'host') {
       // Stay open so the friend can come back with the same link, e.g. after refreshing the page.
-      show(['Your friend disconnected. They can rejoin with the same link or the code ', strong(code), '.'], leaveButton());
-      hooks.wait('Your friend disconnected. Waiting for them to come back…');
+      show([`${Them()} disconnected. They can rejoin with the same link or the code `, strong(code), '.'], leaveButton());
+      hooks.wait(`${Them()} disconnected. Waiting for them to come back…`);
+      addChat('system', `${Them()} left.`);
     } else {
       show('Lost the connection to your friend’s game.', button('Reconnect', () => join(code), true), leaveButton());
-      hooks.wait('Lost the connection to your friend.');
+      hooks.wait(`Lost the connection to ${them()}.`);
+      addChat('system', 'Connection lost.');
     }
   }
 
@@ -307,6 +330,9 @@
     clearTimeout(joinTimer);
     if (client) client.end();
     client = friend = role = null;
+    friendName = '';
+    showChat(false);
+    chatLogEl.replaceChildren();
     seen = { sender: null, seq: 0 };
     started = over = false;
     rematch = { me: false, them: false };
@@ -335,7 +361,7 @@
     if (sender === seen.sender && message.seq <= seen.seq) return;
     seen = { sender, seq: message.seq };
 
-    if (role === 'host' && message.type === 'hello') return welcome(message.sender);
+    if (role === 'host' && message.type === 'hello') return welcome(message);
     if (role === 'host' && message.sender !== friend) return;
     if (role === 'guest' && friend && message.sender !== friend) return;
     lastHeard = Date.now();
@@ -343,10 +369,12 @@
   }
 
   // A guest saying hello: the friend (re)joining, or somebody else with the link.
-  function welcome(from) {
-    if (friend && friend !== from) return send({ type: 'full' }, from);
-    friend = from;
+  function welcome({ sender, name }) {
+    if (friend && friend !== sender) return send({ type: 'full' }, sender);
+    friend = sender;
+    setFriendName(name);
     startPinging();
+    addChat('system', `${Them()} joined.`);
     guestArrived();
   }
 
@@ -354,8 +382,8 @@
   function guestArrived() {
     const { moves, finished } = hooks.snapshot();
     if (started && !finished) {
-      send({ type: 'start', color: hostColor ^ 8, moves });
-      playing('Your friend is back.');
+      send({ type: 'start', color: hostColor ^ 8, moves, name: hooks.myName() });
+      playing(`${Them()} is back.`);
       hooks.resume();
       return;
     }
@@ -367,14 +395,14 @@
     started = true;
     over = false;
     rematch = { me: false, them: false };
-    send({ type: 'start', color: hostColor ^ 8, moves: [] });
+    send({ type: 'start', color: hostColor ^ 8, moves: [], name: hooks.myName() });
     playing();
     hooks.begin(hostColor, []);
   }
 
   function offerDraw() {
     send({ type: 'draw-offer' });
-    show('Draw offered. Waiting for your friend to answer…', leaveButton());
+    show(`Draw offered. Waiting for ${them()} to answer…`, leaveButton());
   }
 
   function requestRematch() {
@@ -403,7 +431,9 @@
         if (!friend) {
           friend = message.sender;
           startPinging();
+          addChat('system', 'Connected.');
         }
+        setFriendName(message.name);
         over = false;
         rematch = { me: false, them: false };
         playing();
@@ -417,7 +447,7 @@
         break;
       case 'draw-offer':
         if (over) return;
-        show('Your friend offers a draw.', button('Accept', () => {
+        show(`${Them()} offers a draw.`, button('Accept', () => {
           send({ type: 'draw-accept' });
           hooks.draw();
         }, true), button('Decline', () => {
@@ -429,7 +459,7 @@
         hooks.draw();
         break;
       case 'draw-decline':
-        playing('Your friend declined the draw.');
+        playing(`${Them()} declined the draw.`);
         break;
       case 'rematch':
         rematch.them = true;
@@ -438,17 +468,114 @@
       case 'bye':
         lost();
         break;
+      case 'name':
+        setFriendName(message.name);
+        break;
+      case 'chat':
+        if (typeof message.text === 'string' && message.text.trim()) {
+          addChat('theirs', message.text.slice(0, CHAT_LENGTH), Them());
+          notify();
+        }
+        break;
+      case 'emote':
+        if (EMOTES.includes(message.emote)) {
+          addChat('theirs', message.emote, Them());
+          floatEmote(message.emote, false);
+          notify();
+        }
+        break;
       case 'full':
         fail('That game already has two players.');
         break;
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Chat and emotes
+  // ---------------------------------------------------------------------------
+
+  function showChat(on) {
+    chatEl.hidden = !on;
+  }
+
+  // kind: 'mine', 'theirs' or 'system'.
+  function addChat(kind, text, who) {
+    const item = document.createElement('li');
+    item.className = 'chat-' + kind;
+    if (who) {
+      const name = document.createElement('span');
+      name.className = 'chat-who';
+      name.textContent = who;
+      item.append(name, ' ');
+    }
+    const body = document.createElement('span');
+    body.className = EMOTES.includes(text) ? 'chat-text chat-emote' : 'chat-text';
+    body.textContent = text;
+    item.append(body);
+    chatLogEl.append(item);
+    while (chatLogEl.children.length > CHAT_KEPT) chatLogEl.firstElementChild.remove();
+    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  }
+
+  function say(text) {
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, CHAT_LENGTH);
+    if (!clean || !friend) return;
+    send({ type: 'chat', text: clean });
+    addChat('mine', clean, 'You');
+  }
+
+  function sendEmote(emote) {
+    if (!friend) return;
+    send({ type: 'emote', emote });
+    addChat('mine', emote, 'You');
+    floatEmote(emote, true);
+  }
+
+  // A big emoji drifting up over the board: from the bottom for yours, the top for your friend's.
+  function floatEmote(emote, mine) {
+    const el = document.createElement('span');
+    el.className = 'emote-float ' + (mine ? 'mine' : 'theirs');
+    el.textContent = emote;
+    el.style.left = 20 + Math.random() * 60 + '%';
+    boardWrapEl.append(el);
+    el.addEventListener('animationend', () => el.remove());
+  }
+
+  // A message that arrives while you are in another tab shows in the tab's title until you return.
+  const title = document.title;
+  function notify() {
+    if (document.hidden) document.title = '💬 ' + title;
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) document.title = title;
+  });
+
+  emotesEl.append(
+    ...EMOTES.map((emote) => {
+      const el = button(emote, () => sendEmote(emote));
+      el.className = 'emote';
+      el.setAttribute('aria-label', 'Send ' + emote);
+      return el;
+    }),
+    ...QUICK_LINES.map((line) => {
+      const el = button(line, () => say(line));
+      el.className = 'quick-line';
+      return el;
+    }),
+  );
+
+  chatFormEl.addEventListener('submit', (event) => {
+    event.preventDefault();
+    say(chatInputEl.value);
+    chatInputEl.value = '';
+  });
+
   root.Online = {
     // hooks: wait(text) freezes the board with a message; begin(color, moves) starts (or restores)
     // a game with this player on `color`; resume() unfreezes it; move(), resign() and draw() report
     // the friend's actions; snapshot() returns { moves, finished } for a friend who rejoins; and
-    // preferredColor() is the color the host picked.
+    // preferredColor() is the color the host picked; myName() is this player's name, and
+    // friendName(name) passes on the friend's.
     open(gameHooks) {
       hooks = gameHooks;
       panelEl.hidden = false;
@@ -459,6 +586,9 @@
       panelEl.hidden = true;
     },
     join,
+    sendName(name) {
+      if (friend) send({ type: 'name', name });
+    },
     sendMove({ from, to, promo }, ply) {
       send({ type: 'move', from, to, promo, ply });
     },

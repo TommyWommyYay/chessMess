@@ -77,3 +77,24 @@ how do i run the game
 [2026-09-30 12:35:06]
 my frend entered the link and it was stuck at infinitely loading
 
+[2026-09-30 12:43:50]
+so what should id o
+
+[2026-09-30 13:53:00]
+can you list all the extra features that i could add
+
+[2026-09-30 13:54:26]
+yes so add a rating system for the computers with a slider toggle. add chat and quick emotes, add player names.
+
+[2026-09-30 14:01:38]
+<task-notification>
+<task-id>btoe5cjhd</task-id>
+<tool-use-id>toolu_011eaNptq2nkchuw1D5Ui91R</tool-use-id>
+<output-file>C:\Users\tommy\AppData\Local\Temp\claude\c--Users-tommy-chessMess-chessMess\47bf2ad5-ee59-48a2-adb6-6392d576a96f\tasks\btoe5cjhd.output</output-file>
+<status>completed</status>
+<summary>Background command "Play engine matches between rating levels" completed (exit code 0)</summary>
+</task-notification>
+
+[2026-09-30 14:03:23]
+yes
+

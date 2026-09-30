@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const { Game, chooseMove, sameMove, squareName, WHITE, BLACK, F_EP, F_CASTLE } = Chess;
+  const { Game, chooseMove, sameMove, squareName, WHITE, BLACK, F_EP, F_CASTLE, MIN_RATING, MAX_RATING } = Chess;
 
   // Solid glyphs for both sides (coloured in CSS); U+FE0E stops the pawn rendering as an emoji.
   const GLYPHS = ['', '♟', '♞', '♝', '♜', '♛', '♚'].map((g) => g && g + '︎');
@@ -9,6 +9,11 @@
   const STORAGE_KEY = 'chessMess';
   const LAST_GAME_KEY = 'chessMess.lastGame';
   const MOVE_MS = 300;
+  const NAME_LENGTH = 20;
+  const START_RATING = 1200;
+  const RATING_K = 32;      // how far one game can move your rating (the usual Elo K-factor)
+  // What the computer's rating slider means, from the bottom up.
+  const RATING_NAMES = [[400, 'Beginner'], [800, 'Casual'], [1200, 'Club player'], [1600, 'Strong'], [2000, 'Expert'], [2300, 'Master']];
 
   const boardEl = document.getElementById('board');
   const boardWrapEl = document.getElementById('board-wrap');
@@ -18,8 +23,13 @@
   const gameOverEl = document.getElementById('game-over');
   const mainEl = document.querySelector('main');
   const modeEl = document.getElementById('mode');
-  const difficultyEl = document.getElementById('difficulty');
+  const ratingEl = document.getElementById('rating');
   const sideEl = document.getElementById('side');
+  const nameEls = {
+    me: document.getElementById('name'),
+    white: document.getElementById('white-name'),
+    black: document.getElementById('black-name'),
+  };
   const resignEl = document.getElementById('resign');
   const reviewLastEl = document.getElementById('review-last');
   const playAgainEl = document.getElementById('play-again');
@@ -29,12 +39,7 @@
     draws: document.getElementById('score-draws'),
   };
 
-  // Who the two score columns belong to in each mode. Same-screen games keep white's and black's.
-  const MODES = {
-    computer: { me: 'You', them: 'Computer' },
-    local: { me: 'White', them: 'Black' },
-    online: { me: 'You', them: 'Friend' },
-  };
+  const MODES = ['computer', 'local', 'online'];
 
   const saved = load(STORAGE_KEY);
   const blankScore = () => ({ me: 0, them: 0, draws: 0 });
@@ -44,9 +49,14 @@
     scores.computer = { me: saved.player || 0, them: saved.computer || 0, draws: saved.draws || 0 };
   }
   const joinCode = new URLSearchParams(location.search).get('join');
-  modeEl.value = joinCode ? 'online' : MODES[saved.mode] ? saved.mode : 'computer';
-  difficultyEl.value = ['easy', 'medium', 'hard'].includes(saved.difficulty) ? saved.difficulty : 'easy';
+  modeEl.value = joinCode ? 'online' : MODES.includes(saved.mode) ? saved.mode : 'computer';
+  // (Before the slider there were three difficulties.)
+  const OLD_LEVELS = { easy: 600, medium: 1200, hard: 2000 };
+  ratingEl.value = clampRating(saved.rating ?? OLD_LEVELS[saved.difficulty] ?? START_RATING);
   sideEl.value = saved.side === 'black' ? 'black' : 'white';
+  const names = { me: '', white: '', black: '', ...saved.names };
+  for (const key of Object.keys(nameEls)) nameEls[key].value = names[key] = cleanName(names[key]);
+  let myRating = Number.isFinite(saved.myRating) ? saved.myRating : START_RATING;
 
   let mode = modeEl.value;  // 'computer', 'local' (two players on this screen) or 'online'
   let game, playerColor, legal, selected, lastMove, positions, history, result;
@@ -57,6 +67,8 @@
   let reviewing = false;    // true while a finished game is being reviewed instead of played
   let waiting = false;      // an online game that has not started, or whose friend has dropped out
   let waitingText = '';
+  let gameRating = Number(ratingEl.value);   // the computer's rating for the game being played
+  let friendName = '';      // the online friend's name, once they have sent it
   let turnToken = 0;        // bumped to cancel a computer move that is still being worked out
   let gameOverTimer = null;
 
@@ -78,7 +90,26 @@
   }
 
   function save() {
-    store(STORAGE_KEY, { scores, mode, difficulty: difficultyEl.value, side: sideEl.value });
+    store(STORAGE_KEY, { scores, mode, rating: Number(ratingEl.value), myRating, names, side: sideEl.value });
+  }
+
+  function clampRating(value) {
+    return Math.min(MAX_RATING, Math.max(MIN_RATING, Math.round(Number(value) / 100) * 100 || START_RATING));
+  }
+
+  function cleanName(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim().slice(0, NAME_LENGTH);
+  }
+
+  function ratingName(rating) {
+    return RATING_NAMES.filter(([from]) => rating >= from).pop()[1];
+  }
+
+  // The two score columns, and the review's: this screen's player (or white) first.
+  function columnNames() {
+    if (mode === 'local') return [names.white || 'White', names.black || 'Black'];
+    if (mode === 'computer') return [names.me || 'You', `Computer (${gameRating})`];
+    return [names.me || 'You', friendName || 'Friend'];
   }
 
   // Who moves the pieces of a color: 'me' (this screen), 'computer' or 'friend' (online).
@@ -89,8 +120,8 @@
 
   // How messages refer to a side.
   function sideName(color) {
-    if (mode === 'local') return color === WHITE ? 'white' : 'black';
-    return { me: 'you', computer: 'the computer', friend: 'your friend' }[seat(color)];
+    if (mode === 'local') return (color === WHITE ? names.white : names.black) || (color === WHITE ? 'white' : 'black');
+    return { me: 'you', computer: 'the computer', friend: friendName || 'your friend' }[seat(color)];
   }
 
   const capitalise = (text) => text[0].toUpperCase() + text.slice(1);
@@ -115,7 +146,7 @@
     worker.onerror = () => {
       worker = null;
       if (pending) {
-        pending.resolve(chooseMove(pending.game, pending.level, pending.seen));
+        pending.resolve(chooseMove(pending.game, pending.rating, pending.seen));
         pending = null;
       }
     };
@@ -124,15 +155,15 @@
   }
 
   function think() {
-    const level = difficultyEl.value;
+    const rating = gameRating;
     return new Promise((resolve) => {
       if (!worker) {
         const current = game, seen = positions;
-        setTimeout(() => resolve(chooseMove(current, level, seen)), 50);
+        setTimeout(() => resolve(chooseMove(current, rating, seen)), 50);
         return;
       }
-      pending = { id: ++requestId, resolve, game, level, seen: positions };
-      worker.postMessage({ id: pending.id, state: game.snapshot(), level, seen: [...positions] });
+      pending = { id: ++requestId, resolve, game, rating, seen: positions };
+      worker.postMessage({ id: pending.id, state: game.snapshot(), rating, seen: [...positions] });
     });
   }
 
@@ -158,6 +189,7 @@
     FX.stop();
     game = new Game();
     playerColor = mode === 'local' ? WHITE : color ?? (sideEl.value === 'black' ? BLACK : WHITE);
+    gameRating = Number(ratingEl.value);
     selected = -1;
     lastMove = null;
     result = null;
@@ -188,6 +220,7 @@
     const iWon = winner !== null && seat(winner) === 'me';
     const column = winner === null ? 'draws' : (mode === 'local' ? winner === WHITE : iWon) ? 'me' : 'them';
     scores[mode][column]++;
+    const ratingText = mode === 'computer' ? rate(winner === null ? 0.5 : iWon ? 1 : 0) : '';
     save();
     // Kept so the game can be reviewed afterwards, even after the page is reloaded.
     if (history.length) {
@@ -195,7 +228,8 @@
         moves: history.map(({ from, to, promo }) => ({ from, to, promo })),
         player: playerColor === BLACK ? 'black' : 'white',
         opponent: mode,
-        level: difficultyEl.value,
+        level: gameRating,
+        names: columnNames(),
         result: message,
       };
       store(LAST_GAME_KEY, lastGame);
@@ -209,12 +243,24 @@
     gameOverTimer = setTimeout(() => {
       document.getElementById('game-over-title').textContent = title;
       document.getElementById('game-over-text').textContent = message;
+      const ratingLine = document.getElementById('game-over-rating');
+      ratingLine.textContent = ratingText;
+      ratingLine.hidden = !ratingText;
       playAgainEl.textContent = mode === 'online' ? 'Rematch' : 'Play again';
       gameOverEl.className = 'overlay ' + mood;
       gameOverEl.hidden = false;
       if (mood === 'win') FX.celebrate();
       if (mood === 'loss') boardWrapEl.classList.add('lost');
     }, 900);
+  }
+
+  // Moves your rating after a game against the computer (Elo: more for beating a stronger
+  // computer, less for beating a weaker one) and describes the change.
+  function rate(points) {
+    const expected = 1 / (1 + 10 ** ((gameRating - myRating) / 400));
+    const change = Math.round(RATING_K * (points - expected));
+    myRating = Math.max(100, myRating + change);
+    return `Your rating: ${myRating} (${change >= 0 ? '+' : '−'}${Math.abs(change)})`;
   }
 
   function resignText(loser) {
@@ -546,10 +592,10 @@
     if (waiting) return waitingText;
     const who = seat(game.turn), check = game.inCheck();
     if (who === 'computer') return 'Computer is thinking';
-    if (who === 'friend') return 'Your friend is thinking';
+    if (who === 'friend') return `${capitalise(sideName(game.turn))} is thinking`;
     if (mode === 'local') {
-      const color = sideName(game.turn);
-      return check ? `${capitalise(color)} is in check — ${color} to move.` : `${capitalise(color)} to move.`;
+      const name = sideName(game.turn);
+      return check ? `${capitalise(name)} is in check — ${name} to move.` : `${capitalise(name)} to move.`;
     }
     return check ? 'You are in check — your move.' : 'Your move.';
   }
@@ -622,8 +668,10 @@
     }
     statusEl.classList.toggle('thinking', !result && !waiting && seat(game.turn) !== 'me');
 
-    document.getElementById('score-me-label').textContent = MODES[mode].me;
-    document.getElementById('score-them-label').textContent = MODES[mode].them;
+    const [first, second] = columnNames();
+    document.getElementById('score-me-label').textContent = first;
+    document.getElementById('score-them-label').textContent = second;
+    renderRating();
     for (const who of Object.keys(scoreEls)) {
       const el = scoreEls[who], value = String(scores[mode][who]);
       if (el.textContent !== value) {
@@ -632,6 +680,17 @@
         el.textContent = value;
       }
     }
+  }
+
+  function renderRating() {
+    const chosen = Number(ratingEl.value);
+    document.getElementById('rating-value').textContent = chosen;
+    // A new rating for the computer takes over from the next game, unless this one has not begun.
+    const later = chosen !== gameRating;
+    document.getElementById('rating-name').textContent = ratingName(chosen) + (later ? ' · from your next game' : '');
+    document.getElementById('my-rating').textContent = myRating;
+    // The filled part of the slider track.
+    ratingEl.style.setProperty('--fill', ((chosen - MIN_RATING) / (MAX_RATING - MIN_RATING) * 100) + '%');
   }
 
   // ---------------------------------------------------------------------------
@@ -709,11 +768,19 @@
     preferredColor() {
       return sideEl.value === 'black' ? BLACK : WHITE;
     },
+    myName() {
+      return names.me;
+    },
+    friendName(name) {
+      friendName = cleanName(name);
+      render();
+    },
   };
 
   function setMode(value) {
     if (mode === 'online') Online.close();
     mode = value;
+    friendName = '';
     waiting = false;
     save();
     newGame();
@@ -753,9 +820,27 @@
     render();
   });
 
-  // Difficulty applies from the computer's next move. Switching sides starts a fresh game, except
-  // online, where it is the side the next game you create starts you on.
-  difficultyEl.addEventListener('change', save);
+  ratingEl.addEventListener('input', () => {
+    // Before the first move it can still change who you are playing.
+    if (mode === 'computer' && !history.length && !result) gameRating = Number(ratingEl.value);
+    save();
+    render();
+  });
+
+  for (const [key, el] of Object.entries(nameEls)) {
+    el.addEventListener('input', () => {
+      names[key] = cleanName(el.value);
+      save();
+      render();
+    });
+    el.addEventListener('change', () => {
+      el.value = names[key];
+      if (key === 'me' && mode === 'online') Online.sendName(names.me);
+    });
+  }
+
+  // Switching sides starts a fresh game, except online, where it is the side the next game you
+  // create starts you on.
   sideEl.addEventListener('change', () => {
     save();
     if (mode !== 'online') newGame();
