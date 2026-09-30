@@ -91,7 +91,7 @@
 
   function frame(now) {
     // `step` is 1 at 60 frames per second, so speeds below are in pixels per 60 Hz frame.
-    const step = Math.min((now - lastTime) / 16.67, 3);
+    const step = Math.max(0, Math.min((now - lastTime) / 16.67, 3));
     lastTime = now;
     fxCtx.clearRect(0, 0, innerWidth, innerHeight);
     particles = particles.filter((p) => {

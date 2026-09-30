@@ -62,6 +62,26 @@
         this.undoStack = [];
       }
 
+      // The position in Forsyth-Edwards Notation, the usual text form that other engines read.
+      fen() {
+        const rows = [];
+        for (let r = 0; r < 8; r++) {
+          let row = '', empty = 0;
+          for (let c = 0; c < 8; c++) {
+            const piece = this.board[r * 8 + c];
+            if (!piece) { empty++; continue; }
+            if (empty) { row += empty; empty = 0; }
+            const letter = ' pnbrqk'[piece & 7];
+            row += (piece & 8) === WHITE ? letter.toUpperCase() : letter;
+          }
+          rows.push(row + (empty || ''));
+        }
+        const rights = (this.castling & 1 ? 'K' : '') + (this.castling & 2 ? 'Q' : '') +
+          (this.castling & 4 ? 'k' : '') + (this.castling & 8 ? 'q' : '');
+        return [rows.join('/'), this.turn === WHITE ? 'w' : 'b', rights || '-',
+          this.ep === -1 ? '-' : squareName(this.ep), this.halfmove, this.fullmove].join(' ');
+      }
+
       // Identifies a position for the threefold repetition rule.
       key() {
         return this.board.join(',') + '|' + this.turn + '|' + this.castling + '|' + this.ep;
@@ -512,12 +532,17 @@
       };
     }
 
-    function chooseMove(g, rating, seen) {
+    // Options: `exclude` lists squares whose pieces may not move this turn (frozen, in chaos games),
+    // and `maxMs` caps the thinking time (when the computer is short of time on its clock).
+    function chooseMove(g, rating, seen, { exclude = [], maxMs = Infinity } = {}) {
       // Shuffled first so that equally good moves are not always played in the same order.
-      const moves = orderMoves(shuffle(g.legalMoves()));
+      let moves = orderMoves(shuffle(g.legalMoves()));
+      const allowed = moves.filter((m) => !exclude.includes(m.from));
+      if (allowed.length) moves = allowed;
       if (!moves.length) return null;
       const ctx = { nodes: 0, stop: false, deadline: Infinity };
       const style = playingStyle(rating);
+      if (style.thinkMs) style.thinkMs = Math.max(50, Math.min(style.thinkMs, maxMs));
 
       if (Math.random() < style.randomMove) return moves[Math.floor(Math.random() * moves.length)];
 
@@ -627,10 +652,10 @@
   // Runs inside a Web Worker so the page stays smooth while the computer thinks or reviews a game.
   function workerMain(Chess) {
     self.onmessage = (event) => {
-      const { id, type, state, rating, seen, played } = event.data;
+      const { id, type, state, rating, seen, played, options } = event.data;
       const game = Chess.Game.restore(state);
       if (type === 'analyse') self.postMessage({ id, analysis: Chess.analyse(game, played) });
-      else self.postMessage({ id, move: Chess.chooseMove(game, rating, new Map(seen)) });
+      else self.postMessage({ id, move: Chess.chooseMove(game, rating, new Map(seen), options) });
     };
   }
 

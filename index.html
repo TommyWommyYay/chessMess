@@ -31,6 +31,11 @@
     </section>
 
     <p id="status" class="status" role="status"></p>
+    <p id="game-info" class="game-info" hidden></p>
+
+    <div id="clock-top" class="clock" aria-label="Clock">
+      <span class="clock-name"></span><span class="clock-time"></span>
+    </div>
 
     <div class="board-row">
       <div id="eval-bar" class="eval-bar" aria-hidden="true">
@@ -60,8 +65,41 @@
             </div>
           </div>
         </div>
+        <div id="draft" class="overlay" hidden>
+          <div class="overlay-card draft-card">
+            <p id="draft-round" class="draft-round"></p>
+            <h2 id="draft-title"></h2>
+            <div id="draft-choices" class="draft-choices"></div>
+            <div id="draft-timer" class="draft-timer"><div></div></div>
+          </div>
+        </div>
+        <ul id="chaos-log" class="chaos-log" aria-live="polite"></ul>
       </div>
     </div>
+
+    <div id="clock-bottom" class="clock" aria-label="Clock">
+      <span class="clock-name"></span><span class="clock-time"></span>
+    </div>
+
+    <section id="setup" class="setup" aria-label="Set up a position" hidden>
+      <p class="setup-help">Pick a piece, then click squares on the board to put it there. Clicking a square again with the same piece, or with the eraser, clears it.</p>
+      <div id="setup-palette" class="setup-palette" role="radiogroup" aria-label="Piece to place"></div>
+      <div class="setup-row">
+        <label>To move
+          <select id="setup-turn">
+            <option value="w">White</option>
+            <option value="b">Black</option>
+          </select>
+        </label>
+        <button id="setup-standard" type="button">Starting position</button>
+        <button id="setup-clear" type="button">Clear board</button>
+      </div>
+      <p id="setup-error" class="setup-error" role="alert"></p>
+      <div class="setup-row">
+        <button id="setup-play" type="button" class="primary">Play this position</button>
+        <button id="setup-cancel" type="button">Cancel</button>
+      </div>
+    </section>
 
     <section id="review" class="review" aria-label="Game review" hidden>
       <header class="review-head">
@@ -113,6 +151,19 @@
             <option value="online">Friend, online</option>
           </select>
         </label>
+        <label id="variant-field">Game mode
+          <select id="variant">
+            <option value="classic">Classic (no clock)</option>
+            <option value="blitz">Blitz</option>
+            <option value="rapid">Rapid</option>
+            <option value="long">Long</option>
+            <option value="chaos">Chaos (5 min)</option>
+            <option value="custom">Custom position</option>
+          </select>
+        </label>
+        <label id="time-field">Time
+          <select id="time"></select>
+        </label>
         <label id="side-field">Play as
           <select id="side">
             <option value="white">White</option>
@@ -143,6 +194,7 @@
         <button id="new-game" type="button" class="primary">New game</button>
         <button id="undo" type="button" aria-label="Undo move">↶&#xFE0E; Undo</button>
         <button id="redo" type="button" aria-label="Redo move">Redo ↷&#xFE0E;</button>
+        <button id="edit-position" type="button">Edit position</button>
         <button id="resign" type="button">Resign</button>
         <button id="review-last" type="button">Review last game</button>
         <button id="reset-score" type="button" class="quiet">Reset score</button>
@@ -154,6 +206,7 @@
 
   <script src="engine.js"></script>
   <script src="fx.js"></script>
+  <script src="chaos.js"></script>
   <script src="grandmasters.js"></script>
   <script src="review.js"></script>
   <script src="online.js"></script>

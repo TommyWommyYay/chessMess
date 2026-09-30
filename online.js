@@ -218,7 +218,8 @@
   function playing(note) {
     if (over) return gameOver();
     showChat(true);
-    show([note ? note + ' ' : '', `Playing online against ${them()}, game `, strong(code), '.'],
+    const kind = hooks.describe();
+    show([note ? note + ' ' : '', `Playing ${kind ? kind + ' ' : ''}online against ${them()}, game `, strong(code), '.'],
       button('Offer draw', offerDraw), leaveButton());
   }
 
@@ -380,9 +381,9 @@
 
   // The host's side of a friend (re)joining: carry on with the game in progress, or start a new one.
   function guestArrived() {
-    const { moves, finished } = hooks.snapshot();
+    const { state, finished } = hooks.snapshot();
     if (started && !finished) {
-      send({ type: 'start', color: hostColor ^ 8, moves, name: hooks.myName() });
+      send({ type: 'start', color: hostColor ^ 8, state, name: hooks.myName() });
       playing(`${Them()} is back.`);
       hooks.resume();
       return;
@@ -391,13 +392,15 @@
     startGame();
   }
 
+  // The host decides the rules (the game mode and any custom position) from its own controls.
   function startGame() {
     started = true;
     over = false;
     rematch = { me: false, them: false };
-    send({ type: 'start', color: hostColor ^ 8, moves: [], name: hooks.myName() });
+    const state = { setup: hooks.setup(), timeline: [] };
+    send({ type: 'start', color: hostColor ^ 8, state, name: hooks.myName() });
+    hooks.begin(hostColor, state);
     playing();
-    hooks.begin(hostColor, []);
   }
 
   function offerDraw() {
@@ -436,11 +439,17 @@
         setFriendName(message.name);
         over = false;
         rematch = { me: false, them: false };
+        hooks.begin(message.color === BLACK ? BLACK : WHITE, message.state && typeof message.state === 'object' ? message.state : {});
         playing();
-        hooks.begin(message.color === BLACK ? BLACK : WHITE, Array.isArray(message.moves) ? message.moves : []);
         break;
       case 'move':
         hooks.move(message);
+        break;
+      case 'chaos-pick':
+        hooks.chaosPick(message);
+        break;
+      case 'timeout':
+        hooks.timeout();
         break;
       case 'resign':
         hooks.resign();
@@ -571,11 +580,13 @@
   });
 
   root.Online = {
-    // hooks: wait(text) freezes the board with a message; begin(color, moves) starts (or restores)
-    // a game with this player on `color`; resume() unfreezes it; move(), resign() and draw() report
-    // the friend's actions; snapshot() returns { moves, finished } for a friend who rejoins; and
-    // preferredColor() is the color the host picked; myName() is this player's name, and
-    // friendName(name) passes on the friend's.
+    // hooks: wait(text) freezes the board with a message; begin(color, state) starts (or restores)
+    // a game with this player on `color` (state: the host's rules, and anything already played);
+    // resume() unfreezes it; move(), chaosPick(), timeout(), resign() and draw() report the friend's
+    // actions; snapshot() returns { state, finished } for a friend who rejoins; setup() is the rules
+    // for a game this player hosts and describe() names the game being played; preferredColor() is
+    // the color the host picked; myName() is this player's name, and friendName(name) passes on the
+    // friend's.
     open(gameHooks) {
       hooks = gameHooks;
       panelEl.hidden = false;
@@ -589,8 +600,16 @@
     sendName(name) {
       if (friend) send({ type: 'name', name });
     },
-    sendMove({ from, to, promo }, ply) {
-      send({ type: 'move', from, to, promo, ply });
+    // `clock` is the mover's time left after the move, in a timed game.
+    sendMove({ from, to, promo }, ply, clock) {
+      send({ type: 'move', from, to, promo, ply, clock });
+    },
+    sendChaosPick(round, pick) {
+      send({ type: 'chaos-pick', round, pick });
+    },
+    // This player's time ran out.
+    timeout() {
+      send({ type: 'timeout' });
     },
     resign() {
       send({ type: 'resign' });

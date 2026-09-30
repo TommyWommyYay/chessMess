@@ -1,7 +1,10 @@
 (function () {
   'use strict';
 
-  const { Game, chooseMove, sameMove, moveToUci, squareName, WHITE, BLACK, F_EP, F_CASTLE, MIN_RATING, MAX_RATING } = Chess;
+  const {
+    Game, chooseMove, sameMove, moveToUci, squareName, START_FEN,
+    WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, F_EP, F_CASTLE, MIN_RATING, MAX_RATING,
+  } = Chess;
 
   // Solid glyphs for both sides (coloured in CSS); U+FE0E stops the pawn rendering as an emoji.
   const GLYPHS = ['', '♟', '♞', '♝', '♜', '♛', '♚'].map((g) => g && g + '︎');
@@ -14,6 +17,17 @@
   const RATING_K = 32;      // how far one game can move your rating (the usual Elo K-factor)
   // What the computer's rating slider means, from the bottom up.
   const RATING_NAMES = [[400, 'Beginner'], [800, 'Casual'], [1200, 'Club player'], [1600, 'Strong'], [2000, 'Expert'], [2300, 'Master']];
+  // Game modes. The timed ones offer chess.com's time controls: [minutes each, seconds added per move].
+  const VARIANTS = {
+    classic: { name: 'Classic', times: null },
+    blitz: { name: 'Blitz', times: [[3, 0], [3, 2], [5, 0]] },
+    rapid: { name: 'Rapid', times: [[10, 0], [15, 10], [30, 0]] },
+    long: { name: 'Long', times: [[45, 15], [60, 0], [90, 30]] },
+    chaos: { name: 'Chaos', times: null },
+    custom: { name: 'Custom position', times: null },
+  };
+  const LOW_TIME_MS = 20 * 1000;     // below this a clock turns red and shows tenths of a second
+  const DRAFT_DELAY_MS = 600;        // lets the last move land before a chaos round covers the board
 
   const boardEl = document.getElementById('board');
   const boardWrapEl = document.getElementById('board-wrap');
@@ -36,6 +50,14 @@
   const undoEl = document.getElementById('undo');
   const redoEl = document.getElementById('redo');
   const reviewLastEl = document.getElementById('review-last');
+  const variantEl = document.getElementById('variant');
+  const timeEl = document.getElementById('time');
+  const editPositionEl = document.getElementById('edit-position');
+  const gameInfoEl = document.getElementById('game-info');
+  const clockEls = { top: document.getElementById('clock-top'), bottom: document.getElementById('clock-bottom') };
+  const draftEl = document.getElementById('draft');
+  const chaosLogEl = document.getElementById('chaos-log');
+  const setupEl = document.getElementById('setup');
   const playAgainEl = document.getElementById('play-again');
   const scoreEls = {
     me: document.getElementById('score-me'),
@@ -64,10 +86,37 @@
   const names = { me: '', white: '', black: '', ...saved.names };
   for (const key of Object.keys(nameEls)) nameEls[key].value = names[key] = cleanName(names[key]);
   let myRating = Number.isFinite(saved.myRating) ? saved.myRating : START_RATING;
+  let variant = VARIANTS[saved.variant] ? saved.variant : 'classic';
+  // The chosen time control of each timed mode, as an index into its list.
+  const timeChoice = { blitz: 0, rapid: 0, long: 0 };
+  for (const key of Object.keys(timeChoice)) {
+    const index = saved.times && saved.times[key];
+    if (Number.isInteger(index) && VARIANTS[key].times[index]) timeChoice[key] = index;
+  }
+  let customFen = typeof saved.customFen === 'string' && !checkPosition(saved.customFen).error ? saved.customFen : START_FEN;
+  variantEl.value = variant;
 
   let mode = modeEl.value;  // 'computer', 'local' (two players on this screen) or 'online'
   let game, playerColor, legal, selected, lastMove, positions, history, result;
   let redoStack = [];       // moves taken back with Undo, the next one to redo last
+  // The rules of the game being played: { variant, fen (the starting position), time ({ base, inc }
+  // in milliseconds, or null for no clock), seed (for chaos rounds) }.
+  let gameSetup = null;
+  let startTurn = WHITE;    // who moves first in gameSetup.fen
+  // Everything played, in order: { type: 'move', from, to, promo } and { type: 'chaos', round, picks }.
+  // It is what an online friend who rejoins is sent to rebuild the game.
+  let timeline = [];
+  // The clocks, in a timed game: `left` is the time each color has (as of `since`, for the one
+  // running), `used` the time both have used between them (chaos rounds go by it) and `mark` the
+  // time each had when the current turn began.
+  let clock = null;
+  let chaos = null;         // chaos bookkeeping (see Chaos.newState) plus the next round's number
+  let draft = null;         // the chaos round being picked: { round, offers, picks }
+  let drafting = false;     // a chaos round is due or being picked, so nobody can move
+  let draftTimer = null;
+  let friendPicks = {};     // an online friend's chaos picks that arrived early, by round
+  let editing = false;      // the position editor has the board
+  let edit = null;          // the position being set up: { board, turn, tool }
   let lastGame = load(LAST_GAME_KEY);
   let squareEls = [];
   let flipped = false;      // the board is drawn from black's side
@@ -100,7 +149,10 @@
   }
 
   function save() {
-    store(STORAGE_KEY, { scores, mode, opponent, rating: sliderRating(), myRating, names, side: sideEl.value });
+    store(STORAGE_KEY, {
+      scores, mode, opponent, rating: sliderRating(), myRating, names, side: sideEl.value,
+      variant, times: timeChoice, customFen,
+    });
   }
 
   function clampRating(value) {
@@ -141,6 +193,85 @@
   const capitalise = (text) => text[0].toUpperCase() + text.slice(1);
 
   // ---------------------------------------------------------------------------
+  // Game modes
+  // ---------------------------------------------------------------------------
+
+  function timeName(time) {
+    const minutes = time.base / 60000, increment = time.inc / 1000;
+    return increment ? `${minutes} | ${increment}` : `${minutes} min`;
+  }
+
+  // "Blitz 3 | 2", "Chaos" or "Custom position"; nothing for a classic game.
+  function setupName(setup) {
+    if (!setup || setup.variant === 'classic') return '';
+    const { name, times } = VARIANTS[setup.variant];
+    return times && setup.time ? `${name} ${timeName(setup.time)}` : name;
+  }
+
+  function randomSeed() {
+    return Math.random().toString(36).slice(2, 10);
+  }
+
+  // The rules for a new game, from the controls.
+  function chosenSetup() {
+    const times = VARIANTS[variant].times;
+    let time = null;
+    if (variant === 'chaos') {
+      time = { ...Chaos.CLOCK };
+    } else if (times) {
+      const [minutes, increment] = times[timeChoice[variant]];
+      time = { base: minutes * 60000, inc: increment * 1000 };
+    }
+    return { variant, fen: variant === 'custom' ? customFen : START_FEN, time, seed: randomSeed() };
+  }
+
+  // An online host's rules, checked over before they are used.
+  function receivedSetup(setup) {
+    if (!setup || typeof setup !== 'object' || !VARIANTS[setup.variant]) {
+      return { variant: 'classic', fen: START_FEN, time: null, seed: randomSeed() };
+    }
+    let time = null;
+    if (setup.variant === 'chaos') time = { ...Chaos.CLOCK };
+    else if (VARIANTS[setup.variant].times && setup.time && Number.isFinite(setup.time.base) && setup.time.base > 0) {
+      time = { base: setup.time.base, inc: Math.max(0, Number(setup.time.inc) || 0) };
+    }
+    const fen = typeof setup.fen === 'string' && !checkPosition(setup.fen).error ? setup.fen : START_FEN;
+    return { variant: setup.variant, fen, time, seed: String(setup.seed || '') };
+  }
+
+  // Whether a position (a FEN, or a Game) can be played from. Returns { game } or { error }.
+  function checkPosition(position) {
+    let g;
+    try {
+      g = typeof position === 'string' ? new Game(position) : position;
+    } catch {
+      return { error: 'That is not a chess position.' };
+    }
+    if (!Array.isArray(g.board) || g.board.length !== 64) return { error: 'That is not a chess position.' };
+    const kings = { [WHITE]: 0, [BLACK]: 0 };
+    for (let sq = 0; sq < 64; sq++) {
+      const piece = g.board[sq];
+      if (!Number.isInteger(piece) || piece < 0 || piece > 14 || (piece && !(piece & 7)) || (piece & 7) === 7) {
+        return { error: 'That is not a chess position.' };
+      }
+      if ((piece & 7) === KING) {
+        kings[piece & 8]++;
+        g.kingSq[piece & 8] = sq;
+      }
+      if ((piece & 7) === PAWN && (sq < 8 || sq >= 56)) return { error: 'Pawns can’t stand on the first or last rank.' };
+    }
+    if (kings[WHITE] !== 1 || kings[BLACK] !== 1) return { error: 'Each side needs exactly one king.' };
+    const name = (color) => (color === WHITE ? 'White' : 'Black');
+    if (g.inCheck(g.turn ^ 8)) {
+      return { error: `${name(g.turn ^ 8)} is in check but it is ${name(g.turn).toLowerCase()}’s move, so the king could be taken. Change who moves first, or the pieces.` };
+    }
+    if (!g.legalMoves().length) {
+      return { error: g.inCheck() ? `${name(g.turn)} is already checkmated.` : `${name(g.turn)} has no legal moves: that is stalemate already.` };
+    }
+    return { game: g };
+  }
+
+  // ---------------------------------------------------------------------------
   // Computer opponent. It thinks in a worker so the animations never stall; if a worker
   // cannot be started it falls back to thinking on the page itself.
   // ---------------------------------------------------------------------------
@@ -160,7 +291,7 @@
     worker.onerror = () => {
       worker = null;
       if (pending) {
-        pending.resolve(chooseMove(pending.game, pending.rating, pending.seen));
+        pending.resolve(chooseMove(pending.game, pending.rating, pending.seen, pending.options));
         pending = null;
       }
     };
@@ -173,30 +304,50 @@
     return thinkOurselves(Math.min(gameRating, MAX_RATING));
   }
 
+  // Limits on the computer's choice: frozen pieces stay put, and it hurries when short of time.
+  function thinkOptions() {
+    const exclude = chaos ? chaos.frozen.filter((f) => f.color === game.turn).map((f) => f.sq) : [];
+    const maxMs = clock ? Math.max(100, clockLeft(game.turn) / 30) : Infinity;
+    return { exclude, maxMs };
+  }
+
   function thinkOurselves(rating) {
+    const options = thinkOptions();
     return new Promise((resolve) => {
       if (!worker) {
         const current = game, seen = positions;
-        setTimeout(() => resolve(chooseMove(current, rating, seen)), 50);
+        setTimeout(() => resolve(chooseMove(current, rating, seen, options)), 50);
         return;
       }
-      pending = { id: ++requestId, resolve, game, rating, seen: positions };
-      worker.postMessage({ id: pending.id, state: game.snapshot(), rating, seen: [...positions] });
+      pending = { id: ++requestId, resolve, game, rating, seen: positions, options };
+      worker.postMessage({ id: pending.id, state: game.snapshot(), rating, seen: [...positions], options });
     });
   }
 
   function thinkLikeGrandmaster() {
-    const current = game, moves = history.map(moveToUci);
-    return Grandmasters.bestMove(gameGm, moves).then(
+    const current = game, ply = history.length;
+    const stillHere = () => current === game && ply === history.length;
+    // A chaos round changes the board in ways moves cannot, so Stockfish gets the position itself.
+    const position = chaos ? { fen: game.fen() }
+      : { fen: gameSetup.fen === START_FEN ? null : gameSetup.fen, moves: history.map(moveToUci) };
+    if (clock) position.movetime = clockLeft(game.turn) / 30;
+    if (chaos && chaos.frozen.some((f) => f.color === game.turn)) position.only = legal.map(moveToUci);
+    // Should Stockfish ever fail to answer (a position it cannot make sense of), stop waiting for it.
+    const giveUp = new Promise((resolve) => setTimeout(() => resolve('timeout'), 25000));
+    return Promise.race([Grandmasters.bestMove(gameGm, position), giveUp]).then(
       (uci) => {
-        if (current !== game) return null;
+        if (!stillHere()) return null;
+        if (uci === 'timeout') {
+          stockfishFailed = true;
+          render();
+        }
         return legal.find((m) => moveToUci(m) === uci) || thinkOurselves(MAX_RATING);
       },
       () => {
         // Stockfish is fetched from the internet; without it, play our own engine's best.
         stockfishFailed = true;
         render();
-        return current === game ? thinkOurselves(MAX_RATING) : null;
+        return stillHere() ? thinkOurselves(MAX_RATING) : null;
       },
     );
   }
@@ -205,10 +356,12 @@
     const token = ++turnToken;
     // A reply that was taken back with Undo comes back as it was, instead of being thought out again.
     const redoing = redoStack.length > 0;
-    // Wait at least long enough for the player's move (or the opening deal) to finish animating.
-    const pause = new Promise((resolve) => setTimeout(resolve, redoing ? 450 : lastMove ? 700 : 1300));
+    // Wait at least long enough for the player's move (or the opening deal) to finish animating;
+    // less long when the clock is ticking.
+    const wait = redoing ? 450 : !lastMove ? 1300 : clock ? 400 : 700;
+    const pause = new Promise((resolve) => setTimeout(resolve, wait));
     Promise.all([redoing ? null : think(), pause]).then(([move]) => {
-      if (token !== turnToken || result) return;
+      if (token !== turnToken || result || drafting) return;
       if (redoing) playMove(redoStack.pop(), undefined, true);
       else if (move) playMove(move);
     });
@@ -218,14 +371,22 @@
   // Game flow
   // ---------------------------------------------------------------------------
 
+  let gameId = 0;           // bumped when a game starts or ends, to cancel anything still pending
+
   // Starts a game with this screen's player on `color` (for an online game, the color the host
-  // picked; otherwise the "Play as" choice). `moves` are already played, when an online game is
-  // picked up again after a dropped connection.
-  function newGame(color, moves = []) {
+  // picked; otherwise the "Play as" choice). `state` comes with an online game: the host's rules
+  // and, when a friend rejoins, everything played so far (see gameState()). Otherwise the controls
+  // decide.
+  function newGame(color, state = null) {
     turnToken++;
+    gameId++;
     clearTimeout(gameOverTimer);
     FX.stop();
-    game = new Game();
+    closeDraft();
+    closeEditor();
+    gameSetup = state ? receivedSetup(state.setup) : chosenSetup();
+    game = new Game(gameSetup.fen);
+    startTurn = game.turn;
     playerColor = mode === 'local' ? WHITE : color ?? (sideEl.value === 'black' ? BLACK : WHITE);
     gameGm = mode === 'computer' ? Grandmasters.find(opponent) : null;
     gameRating = gameGm ? gameGm.rating : sliderRating();
@@ -233,39 +394,100 @@
     lastMove = null;
     result = null;
     history = [];
+    timeline = [];
     redoStack = [];
     positions = new Map([[game.key(), 1]]);
-    for (const saved of moves) {
-      const move = game.legalMoves().find((m) => sameMove(m, saved));
-      if (!move) break;
-      record(move);
+    chaos = gameSetup.variant === 'chaos' ? { ...Chaos.newState(), round: 0 } : null;
+    const base = gameSetup.time ? gameSetup.time.base : 0;
+    clock = gameSetup.time ? {
+      base, inc: gameSetup.time.inc, left: { [WHITE]: base, [BLACK]: base }, mark: { [WHITE]: base, [BLACK]: base },
+      used: 0, running: null, since: 0, started: false,
+    } : null;
+    drafting = false;
+    friendPicks = {};
+    chaosLogEl.replaceChildren();
+    legal = computeLegal();
+    for (const entry of state && Array.isArray(state.timeline) ? state.timeline : []) {
+      if (!replayEntry(entry)) break;
     }
-    legal = game.legalMoves();
+    if (clock && state && state.clocks) restoreClocks(state.clocks);
     promotionEl.hidden = true;
     gameOverEl.hidden = true;
     boardWrapEl.classList.remove('lost');
-    dealing = !moves.length;
-    render();
-    const token = turnToken;
+    dealing = !timeline.length;
+    const id = gameId;
     setTimeout(() => {
-      if (token === turnToken) dealing = false;
+      if (id === gameId) dealing = false;
     }, 1200);
-    if (seat(game.turn) === 'computer') computerTurn();
+    // A chaos game opens with a round (and a friend who rejoins may arrive in the middle of one).
+    const drafts = maybeStartDraft(timeline.length ? 0 : 1200, state && state.picks);
+    render();
+    if (!drafts && seat(game.turn) === 'computer') computerTurn();
+  }
+
+  // Plays one item of an online game's timeline; returns false if it does not fit.
+  function replayEntry(entry) {
+    if (!entry || typeof entry !== 'object') return false;
+    if (entry.type === 'chaos') {
+      if (!chaos || entry.round !== chaos.round || !validPicks(entry.round, entry.picks)) return false;
+      playChaosRound(entry.round, entry.picks);
+    } else {
+      const move = legal.find((m) => sameMove(m, entry));
+      if (!move) return false;
+      if (clock) clock.started = true;
+      advance(move);
+    }
+    legal = computeLegal();
+    return true;
+  }
+
+  function validPicks(round, picks) {
+    return Boolean(picks) && [WHITE, BLACK].every((color) => Chaos.offers(gameSetup.seed, round, color).includes(picks[color]));
+  }
+
+  // An online game as it stands, for a friend who (re)joins.
+  function gameState() {
+    return {
+      setup: gameSetup,
+      timeline,
+      clocks: clock && {
+        [WHITE]: clockLeft(WHITE), [BLACK]: clockLeft(BLACK), used: clock.used, started: clock.started, mark: clock.mark,
+      },
+      picks: draft ? draft.picks : null,
+    };
+  }
+
+  function restoreClocks(saved) {
+    const time = (value, fallback) => (Number.isFinite(value) && value >= 0 ? value : fallback);
+    for (const color of [WHITE, BLACK]) {
+      clock.left[color] = time(saved[color], clock.left[color]);
+      clock.mark[color] = time(saved.mark && saved.mark[color], clock.left[color]);
+    }
+    clock.used = time(saved.used, clock.used);
+    clock.started = Boolean(saved.started);
   }
 
   // `winner` is a color, or null for a draw.
   function finish(winner, message) {
     result = message;
     turnToken++;
+    gameId++;
+    closeDraft();
+    drafting = false;
+    promotionEl.hidden = true;
+    selected = -1;
+    stopClock();
     const iWon = winner !== null && seat(winner) === 'me';
     const column = winner === null ? 'draws' : (mode === 'local' ? winner === WHITE : iWon) ? 'me' : 'them';
     scores[mode][column]++;
     const ratingText = mode === 'computer' ? rate(winner === null ? 0.5 : iWon ? 1 : 0) : '';
     save();
-    // Kept so the game can be reviewed afterwards, even after the page is reloaded.
-    if (history.length) {
+    // Kept so the game can be reviewed afterwards, even after the page is reloaded. A chaos game
+    // cannot be: its rounds change the board in ways the review cannot follow.
+    if (history.length && !chaos) {
       lastGame = {
         moves: history.map(({ from, to, promo }) => ({ from, to, promo })),
+        fen: gameSetup.fen === START_FEN ? undefined : gameSetup.fen,
         player: playerColor === BLACK ? 'black' : 'white',
         opponent: mode,
         level: gameRating,
@@ -280,6 +502,7 @@
     let title = 'Draw', mood = 'draw';
     if (winner !== null && mode === 'local') [title, mood] = [capitalise(sideName(winner)) + ' wins!', 'win'];
     else if (winner !== null) [title, mood] = iWon ? ['You win!', 'win'] : ['Defeat', 'loss'];
+    const reviewable = !chaos;
     // Let the final move (and any explosion) play out before announcing the result.
     gameOverTimer = setTimeout(() => {
       document.getElementById('game-over-title').textContent = title;
@@ -287,6 +510,7 @@
       const ratingLine = document.getElementById('game-over-rating');
       ratingLine.textContent = ratingText;
       ratingLine.hidden = !ratingText;
+      document.getElementById('review-game').hidden = !reviewable;
       playAgainEl.textContent = mode === 'online' ? 'Rematch' : 'Play again';
       gameOverEl.className = 'overlay ' + mood;
       gameOverEl.hidden = false;
@@ -314,6 +538,25 @@
     return `Checkmate — ${sideName(winner)} wins.`;
   }
 
+  // Only a lone king, or a king with one knight or bishop, has no way at all to checkmate.
+  function canMate(color) {
+    let minors = 0;
+    for (const piece of game.board) {
+      if (!piece || (piece & 8) !== color) continue;
+      const type = piece & 7;
+      if (type === PAWN || type === ROOK || type === QUEEN) return true;
+      if (type === KNIGHT || type === BISHOP) minors++;
+    }
+    return minors >= 2;
+  }
+
+  // [winner, message] when `loser`'s time runs out.
+  function timeoutResult(loser) {
+    const winner = loser ^ 8, name = capitalise(sideName(loser)), other = sideName(winner);
+    if (!canMate(winner)) return [null, `${name} ran out of time, but ${other} can’t checkmate — a draw.`];
+    return [winner, `${name} ran out of time — ${other} ${other === 'you' ? 'win' : 'wins'}.`];
+  }
+
   // Makes a move on the board without any of the presentation; returns the new position's key.
   function record(move) {
     game.make(move);
@@ -324,61 +567,358 @@
     return key;
   }
 
+  // Plays a move with the chaos rules that come with it, but none of the presentation. Returns the
+  // new position's key.
+  function advance(move) {
+    const mover = game.turn;
+    if (chaos && move.captured) chaos.captured[mover ^ 8].push(move.captured & 7);
+    const key = record(move);
+    timeline.push({ type: 'move', from: move.from, to: move.to, promo: move.promo || 0 });
+    if (chaos) {
+      // Frozen pieces thaw a turn at a time, and are forgotten once taken.
+      chaos.frozen = chaos.frozen.filter((f) => {
+        if (f.color === mover) f.turns--;
+        const piece = game.board[f.sq];
+        return f.turns > 0 && piece && (piece & 8) === f.color;
+      });
+      // Rage: the same side moves again, unless its move gave check or ended the game.
+      if (chaos.rage[mover]) {
+        chaos.rage[mover] = false;
+        if (!game.inCheck() && game.legalMoves().length && !game.insufficientMaterial()) {
+          const ep = game.ep;
+          game.turn = mover;
+          game.ep = -1;
+          if (!game.legalMoves().length) {
+            game.turn = mover ^ 8;
+            game.ep = ep;
+          }
+        }
+      }
+    }
+    return key;
+  }
+
+  // The moves the side to move may make: all legal ones, less those of frozen pieces. Frozen pieces
+  // thaw early rather than leave no move at all.
+  function computeLegal() {
+    const moves = game.legalMoves();
+    if (!chaos) return moves;
+    const frozen = new Set(chaos.frozen.filter((f) => f.color === game.turn).map((f) => f.sq));
+    const free = moves.filter((m) => !frozen.has(m.from));
+    if (free.length || !moves.length) return free;
+    chaos.frozen = chaos.frozen.filter((f) => f.color !== game.turn);
+    return moves;
+  }
+
   // `drop` is set when the player dragged the piece onto its square, so it should not slide there
   // again; it holds how far the piece was swinging when it was let go. `redoing` is set when the
   // move is one that was taken back with Undo; any other move forgets the moves that could be redone.
-  function playMove(move, drop, redoing = false) {
+  // `reportedClock` is an online friend's time after their move, as their page counted it.
+  function playMove(move, drop, redoing = false, reportedClock = null) {
     const mover = game.turn;
     dealing = false;
     if (!redoing) redoStack = [];
-    const key = record(move);
+    clockMoved(mover, reportedClock);
+    const key = advance(move);
     selected = -1;
-    legal = game.legalMoves();
-    if (mode === 'online' && seat(mover) === 'me') Online.sendMove(move, history.length - 1);
+    legal = computeLegal();
+    if (mode === 'online' && seat(mover) === 'me') Online.sendMove(move, history.length - 1, clock ? clock.left[mover] : null);
+    checkGameOver(key);
+    const drafts = maybeStartDraft(DRAFT_DELAY_MS);
+    render();
+    // An online friend's move can arrive during a review, or while the editor has the board.
+    if (!reviewing && !editing) animateMove(move, mover, drop);
+    if (!result && !drafts && seat(game.turn) === 'computer') computerTurn();
+  }
 
+  // Ends the game if the position calls for it. `key` is the position's after a move; `byChaos` is
+  // set when a chaos round made the position.
+  function checkGameOver(key, byChaos = false) {
+    if (result) return;
     if (!legal.length) {
-      if (game.inCheck()) finish(mover, checkmateText(mover));
-      else finish(null, 'Stalemate — no legal moves left.');
+      const winner = game.turn ^ 8;
+      if (game.inCheck()) finish(winner, (byChaos ? 'Chaos! ' : '') + checkmateText(winner));
+      else finish(null, (byChaos ? 'Chaos! ' : '') + 'Stalemate — no legal moves left.');
     } else if (game.insufficientMaterial()) {
       finish(null, 'Not enough pieces left to checkmate.');
-    } else if (positions.get(key) >= 3) {
+    } else if (key && positions.get(key) >= 3) {
       finish(null, 'The same position came up three times.');
     } else if (game.halfmove >= 100) {
       finish(null, 'Fifty moves without a capture or pawn move.');
     }
+  }
 
+  // ---------------------------------------------------------------------------
+  // Clocks
+  // ---------------------------------------------------------------------------
+
+  function clockLeft(color) {
+    const running = clock.running === color ? performance.now() - clock.since : 0;
+    return Math.max(0, clock.left[color] - running);
+  }
+
+  function stopClock() {
+    if (!clock || clock.running === null) return;
+    clock.left[clock.running] = clockLeft(clock.running);
+    clock.running = null;
+  }
+
+  // Runs the clock of the side to move, unless the game has not begun, is over or is paused. An
+  // offline game pauses while the board is lent to a review or the editor; an online one only for
+  // a chaos round or a friend who dropped out.
+  function syncClock() {
+    if (!clock) return;
+    const paused = !clock.started || result || drafting || waiting || (mode !== 'online' && (reviewing || editing));
+    const wanted = paused ? null : game.turn;
+    if (clock.running === wanted) return;
+    stopClock();
+    if (wanted !== null) {
+      clock.running = wanted;
+      clock.since = performance.now();
+    }
+  }
+
+  // The clocks after `mover` moves: its clock stops (at the time its own page reports, for an online
+  // friend) and gains the increment. The game's first move is free: the clocks start after it.
+  function clockMoved(mover, reported) {
+    if (!clock) return;
+    stopClock();
+    const bonus = clock.started ? clock.inc : 0;
+    if (typeof reported === 'number' && Number.isFinite(reported)) clock.left[mover] = Math.max(0, reported);
+    else clock.left[mover] += bonus;
+    clock.used += Math.max(0, clock.mark[mover] + bonus - clock.left[mover]);
+    clock.started = true;
+    clock.mark = { [WHITE]: clock.left[WHITE], [BLACK]: clock.left[BLACK] };
+  }
+
+  // Clock time used by both players so far, counting the turn in progress.
+  function usedNow() {
+    return clock.used + (clock.running === null ? 0 : Math.max(0, clock.mark[clock.running] - clockLeft(clock.running)));
+  }
+
+  function formatTime(ms) {
+    if (ms < LOW_TIME_MS) {
+      const tenths = Math.floor(ms / 100);
+      return `0:${String(Math.floor(tenths / 10)).padStart(2, '0')}.${tenths % 10}`;
+    }
+    const seconds = Math.floor(ms / 1000);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+
+  function flag(color) {
+    stopClock();
+    clock.left[color] = 0;
+    const [winner, message] = timeoutResult(color);
+    if (mode === 'online') Online.timeout();
+    finish(winner, message);
     render();
-    // An online friend's move can arrive during a review, which has the board just then.
-    if (!reviewing) animateMove(move, mover, drop);
+  }
+
+  // Keeps the clocks (and the chaos countdown) up to date, and calls time.
+  setInterval(() => {
+    if (!clock || !game) return;
+    renderClocks();
+    renderGameInfo();
+    const color = clock.running;
+    if (color === null || clockLeft(color) > 0) return;
+    // An online friend's own page says when their time is up.
+    if (mode === 'online' && seat(color) === 'friend') return;
+    flag(color);
+  }, 100);
+
+  // ---------------------------------------------------------------------------
+  // Chaos rounds. When a round is due (at the start, and then each time the players have used a
+  // certain amount of clock time between them) the clocks stop and each player picks one of three
+  // modifiers; then both are applied, white's first.
+  // ---------------------------------------------------------------------------
+
+  function chaosDue() {
+    return Boolean(chaos) && !result && chaos.round < Chaos.ROUNDS.length && clock.used >= Chaos.ROUNDS[chaos.round];
+  }
+
+  // Starts the next chaos round after `delay` if it is due, and returns whether it is. `known` holds
+  // picks already made (in a round a rejoining online friend arrives in the middle of).
+  function maybeStartDraft(delay, known) {
+    if (!chaosDue()) return false;
+    drafting = true;
+    const id = gameId;
+    setTimeout(() => {
+      if (id === gameId && !result && !draft) startDraft(known);
+    }, delay);
+    return true;
+  }
+
+  function startDraft(known) {
+    const round = chaos.round, seed = gameSetup.seed;
+    draft = {
+      round,
+      offers: { [WHITE]: Chaos.offers(seed, round, WHITE), [BLACK]: Chaos.offers(seed, round, BLACK) },
+      picks: {},
+    };
+    drafting = true;
+    for (const color of [WHITE, BLACK]) {
+      const pick = (known && known[color]) || (seat(color) === 'friend' ? friendPicks[round] : null);
+      if (pick && draft.offers[color].includes(pick)) draft.picks[color] = pick;
+      if (seat(color) === 'computer') draft.picks[color] = computerPick(color);
+    }
+    render();
+    nextPick();
+  }
+
+  function computerPick(color) {
+    return Chaos.choose(game, {
+      seed: gameSetup.seed, round: draft.round, offered: draft.offers[color], color, state: chaos,
+      clockLeft: (c) => clock.left[c],
+      // Weaker computers judge the modifiers more loosely.
+      noise: gameGm ? 0 : Math.max(0, (1800 - gameRating) / 3),
+    });
+  }
+
+  // Shows the next pick to be made on this screen, waits for an online friend's, or plays the round.
+  function nextPick() {
+    clearInterval(draftTimer);
+    const color = [WHITE, BLACK].find((c) => seat(c) === 'me' && !draft.picks[c]);
+    if (color !== undefined) return showOffers(color);
+    if (draft.picks[WHITE] && draft.picks[BLACK]) return resolveDraft();
+    showDraftCard(`Waiting for ${sideName(playerColor ^ 8)} to pick…`, []);
+  }
+
+  function showOffers(color) {
+    const title = mode === 'local' ? `${capitalise(sideName(color))}, pick a modifier` : 'Pick a modifier';
+    const choices = draft.offers[color].map((id) => {
+      const modifier = Chaos.find(id);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'draft-choice';
+      const icon = document.createElement('span');
+      icon.className = 'draft-icon';
+      icon.textContent = modifier.icon;
+      const name = document.createElement('strong');
+      name.textContent = modifier.name;
+      const text = document.createElement('span');
+      text.className = 'draft-text';
+      text.textContent = modifier.text;
+      button.append(icon, name, text);
+      button.addEventListener('click', () => pickModifier(color, id));
+      return button;
+    });
+    showDraftCard(title, choices);
+    // A pick is made at random for anyone who takes too long.
+    const deadline = performance.now() + Chaos.PICK_MS;
+    const bar = document.querySelector('#draft-timer div');
+    bar.style.width = '100%';
+    draftTimer = setInterval(() => {
+      const left = deadline - performance.now();
+      bar.style.width = Math.max(0, left / Chaos.PICK_MS * 100) + '%';
+      if (left <= 0) {
+        const offered = draft.offers[color];
+        pickModifier(color, offered[Math.floor(Math.random() * offered.length)]);
+      }
+    }, 100);
+  }
+
+  function showDraftCard(title, choices) {
+    document.getElementById('draft-round').textContent = `Chaos round ${draft.round + 1} of ${Chaos.ROUNDS.length}`;
+    document.getElementById('draft-title').textContent = title;
+    document.getElementById('draft-choices').replaceChildren(...choices);
+    document.getElementById('draft-timer').hidden = !choices.length;
+    draftEl.hidden = false;
+  }
+
+  function pickModifier(color, id) {
+    if (!draft || draft.picks[color]) return;
+    draft.picks[color] = id;
+    if (mode === 'online') Online.sendChaosPick(draft.round, id);
+    nextPick();
+  }
+
+  function closeDraft() {
+    clearInterval(draftTimer);
+    draftEl.hidden = true;
+    draft = null;
+  }
+
+  function resolveDraft() {
+    const { round, picks } = draft;
+    closeDraft();
+    drafting = false;
+    const outcomes = playChaosRound(round, picks);
+    legal = computeLegal();
+    positions.set(game.key(), (positions.get(game.key()) || 0) + 1);
+    checkGameOver(null, true);
+    render();
+    showChaos(outcomes);
     if (!result && seat(game.turn) === 'computer') computerTurn();
   }
 
+  // Applies both picks of a round, white's first, and returns what happened.
+  function playChaosRound(round, picks) {
+    const outcomes = [WHITE, BLACK].map((color) => {
+      const o = Chaos.apply(game, { seed: gameSetup.seed, round, picks, color, state: chaos, clockLeft: (c) => clock.left[c] });
+      for (const [c, change] of Object.entries(o.clock)) clock.left[c] = Math.max(0, clock.left[c] + change);
+      return o;
+    });
+    clock.mark = { [WHITE]: clock.left[WHITE], [BLACK]: clock.left[BLACK] };
+    chaos.round = round + 1;
+    timeline.push({ type: 'chaos', round, picks: { [WHITE]: picks[WHITE], [BLACK]: picks[BLACK] } });
+    selected = -1;
+    return outcomes;
+  }
+
+  // Says what each pick did, over the board, and shows it happening.
+  function showChaos(outcomes) {
+    for (const o of outcomes) {
+      const label = o.mirrored && o.modifier.id !== 'mirror-both' ? `Mirror → ${o.modifier.name}` : o.pick.name;
+      const item = document.createElement('li');
+      item.textContent = `${o.modifier.icon} ${capitalise(sideName(o.color))} — ${label}: ${o.text}.`;
+      chaosLogEl.append(item);
+      setTimeout(() => item.remove(), 7000);
+      if (reviewing || editing) continue;
+      for (const { sq, piece } of o.destroyed) blowUp(sq, piece);
+      for (const sq of o.spawned) {
+        const piece = squareEls[sq].querySelector('.piece');
+        if (piece) piece.animate({ scale: [0, 1.4, 1], opacity: [0, 1, 1] }, { duration: 550, easing: 'ease-out' });
+      }
+      for (const sq of o.changed) {
+        const piece = squareEls[sq].querySelector('.piece');
+        if (piece) piece.animate({ scale: [1.5, 1], filter: ['brightness(4)', 'none'] }, { duration: 600, easing: 'ease-out' });
+      }
+      for (const { from, to } of o.moved) slide(from, to);
+    }
+    while (chaosLogEl.children.length > 4) chaosLogEl.firstElementChild.remove();
+  }
+
   // ---------------------------------------------------------------------------
-  // Undo and redo, for games against the computer and on a shared screen. Against the computer,
-  // Undo takes back your last move along with the computer's reply to it (or stops the computer
-  // thinking about one), so it is your move again.
+  // Undo and redo, for untimed games against the computer and on a shared screen. Against the
+  // computer, Undo takes back your last move along with the computer's reply to it (or stops the
+  // computer thinking about one), so it is your move again.
   // ---------------------------------------------------------------------------
 
   function colorOfPly(ply) {
-    return ply % 2 ? BLACK : WHITE;
+    return ply % 2 ? startTurn ^ 8 : startTurn;
+  }
+
+  function undoAllowed() {
+    return mode !== 'online' && !clock && !chaos && !reviewing && !editing && !result;
   }
 
   function canUndo() {
-    return mode !== 'online' && !reviewing && !result && history.some((_, ply) => seat(colorOfPly(ply)) === 'me');
+    return undoAllowed() && history.some((_, ply) => seat(colorOfPly(ply)) === 'me');
   }
 
   function canRedo() {
-    return mode !== 'online' && !reviewing && !result && redoStack.length > 0 && seat(game.turn) === 'me';
+    return undoAllowed() && redoStack.length > 0 && seat(game.turn) === 'me';
   }
 
   // Sets the game up afresh with `moves` played.
   function replay(moves) {
-    game = new Game();
+    game = new Game(gameSetup.fen);
     history = [];
+    timeline = [];
     lastMove = null;
     positions = new Map([[game.key(), 1]]);
-    for (const move of moves) record(move);
-    legal = game.legalMoves();
+    for (const move of moves) advance(move);
+    legal = computeLegal();
     selected = -1;
   }
 
@@ -414,10 +954,11 @@
   }
 
   function playerCanMove() {
-    return !reviewing && !waiting && !result && seat(game.turn) === 'me' && promotionEl.hidden;
+    return !reviewing && !editing && !waiting && !drafting && !result && seat(game.turn) === 'me' && promotionEl.hidden;
   }
 
   function onSquareClick(sq) {
+    if (editing) return editSquare(sq);
     if (!playerCanMove()) return;
     dealing = false;
     if (selected !== -1) {
@@ -517,6 +1058,10 @@
   boardEl.addEventListener('pointerdown', (event) => {
     if (event.button !== 0 || drag) return;
     const sq = squareAt(event.clientX, event.clientY);
+    if (editing) {
+      if (sq !== -1) editSquare(sq);
+      return;
+    }
     if (sq === -1 || !playerCanMove()) return;
     const piece = game.board[sq];
     // Pressing anything but one of the player's own pieces is a plain click: move there, or deselect.
@@ -644,13 +1189,18 @@
 
     // Keep the captured piece on its square until the attacker arrives, then blow it up.
     const captureSq = move.flags & F_EP ? move.to + (mover === WHITE ? 8 : -8) : move.to;
-    const square = squareEls[captureSq];
-    const ghost = pieceEl(move.captured);
+    blowUp(captureSq, move.captured, drop ? 0 : MOVE_MS * 0.6);
+  }
+
+  // Blows up `piece`, which has just left square `sq` (taken, or destroyed in a chaos round).
+  function blowUp(sq, piece, delay = 0) {
+    const square = squareEls[sq];
+    const ghost = pieceEl(piece);
     ghost.classList.add('ghost');
     square.prepend(ghost);
     setTimeout(() => {
       const box = square.getBoundingClientRect();
-      FX.explode(box.left + box.width / 2, box.top + box.height / 2, box.width, (move.captured & 8) === WHITE);
+      FX.explode(box.left + box.width / 2, box.top + box.height / 2, box.width, (piece & 8) === WHITE);
       ghost.animate([
         { transform: 'scale(1)', opacity: 1, filter: 'brightness(3)' },
         { transform: 'scale(2.4)', opacity: 0, filter: 'brightness(6) blur(5px)' },
@@ -663,7 +1213,7 @@
         { transform: 'translate(3px, 3px)' },
         { transform: 'translate(0, 0)' },
       ], { duration: 380, easing: 'ease-out' });
-    }, drop ? 0 : MOVE_MS * 0.6);
+    }, delay);
   }
 
   function pop(el) {
@@ -693,8 +1243,10 @@
   }
 
   function statusText() {
+    if (editing) return 'Set up a position: pick a piece below, then click the board.';
     if (result) return result;
     if (waiting) return waitingText;
+    if (drafting) return `Chaos round ${chaos.round + 1}! Each side picks a modifier.`;
     const who = seat(game.turn), check = game.inCheck();
     if (who === 'computer') return `${gameGm ? gameGm.name : 'Computer'} is thinking`;
     if (who === 'friend') return `${capitalise(sideName(game.turn))} is thinking`;
@@ -707,7 +1259,8 @@
 
   // Draws a position onto the board and returns its squares, indexed by square number. The live
   // game and the review both draw through here. `movable` is the color whose pieces can be picked up.
-  function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1 } = {}) {
+  // `frozen` holds squares whose pieces are frozen in a chaos game.
+  function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1, frozen = new Set() } = {}) {
     const checkedKing = position.inCheck() ? position.kingSq[position.turn] : -1;
     const ordered = [];
     flipped = flip;
@@ -727,6 +1280,7 @@
       if (targets.has(sq)) el.classList.add('target');
       if (piece) el.classList.add('occupied');
       if (piece && (piece & 8) === movable) el.classList.add('mine');
+      if (piece && frozen.has(sq)) el.classList.add('frozen');
 
       let label = squareName(sq);
       if (piece) {
@@ -753,27 +1307,38 @@
   }
 
   function render() {
-    if (reviewing) return;
-    boardEl.classList.toggle('dealing', dealing);
-    drawBoard(game, {
-      flip: playerColor === BLACK,
-      lastMove,
-      selected,
-      targets: new Set(legal.filter((m) => m.from === selected).map((m) => m.to)),
-      movable: playerCanMove() ? game.turn : -1,
-    });
+    syncClock();
     mainEl.dataset.mode = mode;
-    resignEl.disabled = Boolean(result) || waiting;
+    mainEl.dataset.variant = variant;
+    mainEl.dataset.clock = clock ? 'on' : 'off';
+    renderGameInfo();
+    if (reviewing) return;
+    boardEl.classList.toggle('dealing', dealing && !editing);
+    if (editing) {
+      renderEditor();
+    } else {
+      drawBoard(game, {
+        flip: playerColor === BLACK,
+        lastMove,
+        selected,
+        targets: new Set(legal.filter((m) => m.from === selected).map((m) => m.to)),
+        movable: playerCanMove() ? game.turn : -1,
+        frozen: new Set(chaos ? chaos.frozen.map((f) => f.sq) : []),
+      });
+    }
+    renderClocks();
+    resignEl.disabled = Boolean(result) || waiting || editing;
     undoEl.disabled = !canUndo();
     redoEl.disabled = !canRedo();
-    reviewLastEl.disabled = !lastGame.moves;
+    reviewLastEl.disabled = !lastGame.moves || drafting || editing;
+    editPositionEl.disabled = editing || drafting;
 
     const text = statusText();
     if (statusEl.textContent !== text) {
       statusEl.textContent = text;
       statusEl.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 300 });
     }
-    statusEl.classList.toggle('thinking', !result && !waiting && seat(game.turn) !== 'me');
+    statusEl.classList.toggle('thinking', !result && !waiting && !drafting && !editing && seat(game.turn) !== 'me');
 
     const [first, second] = columnNames();
     document.getElementById('score-me-label').textContent = first;
@@ -787,6 +1352,42 @@
         el.textContent = value;
       }
     }
+  }
+
+  // The two clocks, beside the board: the top one for the side at the top.
+  function renderClocks() {
+    if (!clock || !game) return;
+    const top = flipped ? WHITE : BLACK;
+    for (const [where, color] of [['top', top], ['bottom', top ^ 8]]) {
+      const el = clockEls[where], left = clockLeft(color);
+      el.querySelector('.clock-name').textContent = capitalise(sideName(color));
+      el.querySelector('.clock-time').textContent = formatTime(left);
+      el.classList.toggle('running', clock.running === color);
+      el.classList.toggle('low', left < LOW_TIME_MS);
+      el.classList.toggle('white-side', color === WHITE);
+    }
+  }
+
+  // The line under the status: which mode this is and, in chaos, when the next round comes.
+  function renderGameInfo() {
+    const parts = [];
+    const name = setupName(gameSetup);
+    if (name) parts.push(name);
+    if (chaos && !result) {
+      const at = Chaos.ROUNDS[chaos.round], total = Chaos.ROUNDS.length;
+      if (drafting) parts.push(`round ${chaos.round + 1} of ${total}`);
+      else if (at !== undefined) parts.push(`round ${chaos.round + 1} of ${total} in ${formatTime(Math.max(0, at - usedNow()))} of play`);
+      else parts.push('all rounds played');
+      for (const color of [WHITE, BLACK]) {
+        if (!chaos.rage[color]) continue;
+        const who = sideName(color);
+        parts.push(`😡 ${capitalise(who)} ${who === 'you' ? 'move' : 'moves'} twice next turn`);
+      }
+      if (chaos.frozen.length) parts.push('❄️ frozen pieces can’t move');
+    }
+    const text = parts.join(' · ');
+    gameInfoEl.hidden = !text;
+    if (gameInfoEl.textContent !== text) gameInfoEl.textContent = text;
   }
 
   function renderRating() {
@@ -877,10 +1478,138 @@
       close() {
         reviewing = false;
         render();
-        if (!result && seat(game.turn) === 'computer') computerTurn();
+        if (!result && !drafting && seat(game.turn) === 'computer') computerTurn();
       },
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // The position editor, for custom games. It borrows the board: pick a piece from the palette
+  // (or the eraser), then click squares.
+  // ---------------------------------------------------------------------------
+
+  const paletteEl = document.getElementById('setup-palette');
+  const setupTurnEl = document.getElementById('setup-turn');
+  const setupErrorEl = document.getElementById('setup-error');
+  const setupPlayEl = document.getElementById('setup-play');
+  const ERASER = 0;
+
+  paletteEl.append(...[WHITE, BLACK].flatMap((color) => [KING, QUEEN, ROOK, BISHOP, KNIGHT, PAWN].map((type) => color | type))
+    .concat(ERASER).map((tool) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'setup-tool';
+      button.dataset.tool = tool;
+      button.setAttribute('role', 'radio');
+      if (tool === ERASER) {
+        button.textContent = '✕';
+        button.setAttribute('aria-label', 'Eraser');
+      } else {
+        button.append(pieceEl(tool));
+        button.setAttribute('aria-label', ((tool & 8) === WHITE ? 'White ' : 'Black ') + PIECE_NAMES[tool & 7]);
+      }
+      button.addEventListener('click', () => {
+        edit.tool = tool;
+        renderEditor();
+      });
+      return button;
+    }));
+
+  function openEditor() {
+    if (reviewing || drafting) return;
+    const start = new Game(customFen);
+    turnToken++;   // the computer stops thinking (it carries on if the editor is cancelled)
+    editing = true;
+    edit = { board: start.board.slice(), turn: start.turn, tool: edit ? edit.tool : (WHITE | QUEEN) };
+    drag = null;
+    selected = -1;
+    promotionEl.hidden = true;
+    gameOverEl.hidden = true;
+    setupErrorEl.textContent = '';
+    setupPlayEl.textContent = mode === 'online' ? 'Use in my next game' : 'Play this position';
+    mainEl.classList.add('editing');
+    setupEl.hidden = false;
+    render();
+  }
+
+  function closeEditor() {
+    if (!editing) return;
+    editing = false;
+    mainEl.classList.remove('editing');
+    setupEl.hidden = true;
+  }
+
+  function renderEditor() {
+    drawBoard({ board: edit.board, inCheck: () => false }, { flip: mode !== 'local' && sideEl.value === 'black' });
+    for (const button of paletteEl.children) {
+      const chosen = Number(button.dataset.tool) === edit.tool;
+      button.classList.toggle('chosen', chosen);
+      button.setAttribute('aria-checked', String(chosen));
+    }
+    setupTurnEl.value = edit.turn === WHITE ? 'w' : 'b';
+  }
+
+  function editSquare(sq) {
+    const { tool, board } = edit;
+    if (tool === ERASER || board[sq] === tool) {
+      board[sq] = 0;
+    } else {
+      // There is only one king of each color: placing it moves it.
+      if ((tool & 7) === KING) for (let s = 0; s < 64; s++) if (board[s] === tool) board[s] = 0;
+      board[sq] = tool;
+    }
+    setupErrorEl.textContent = '';
+    renderEditor();
+  }
+
+  // The position being edited, as a game: castling is allowed wherever a king and rook are still
+  // on their starting squares.
+  function editedGame() {
+    const g = new Game();
+    g.board = edit.board.slice();
+    g.turn = edit.turn;
+    g.ep = -1;
+    g.halfmove = 0;
+    g.fullmove = 1;
+    g.castling = 0;
+    for (const [bit, king, rook, color] of [[1, 60, 63, WHITE], [2, 60, 56, WHITE], [4, 4, 7, BLACK], [8, 4, 0, BLACK]]) {
+      if (g.board[king] === (color | KING) && g.board[rook] === (color | ROOK)) g.castling |= bit;
+    }
+    return g;
+  }
+
+  setupTurnEl.addEventListener('change', () => {
+    edit.turn = setupTurnEl.value === 'b' ? BLACK : WHITE;
+    setupErrorEl.textContent = '';
+  });
+  document.getElementById('setup-standard').addEventListener('click', () => {
+    edit.board = new Game().board.slice();
+    edit.turn = WHITE;
+    setupErrorEl.textContent = '';
+    renderEditor();
+  });
+  document.getElementById('setup-clear').addEventListener('click', () => {
+    edit.board = new Array(64).fill(0);
+    setupErrorEl.textContent = '';
+    renderEditor();
+  });
+  setupPlayEl.addEventListener('click', () => {
+    const { game: g, error } = checkPosition(editedGame());
+    if (error) {
+      setupErrorEl.textContent = error;
+      return;
+    }
+    customFen = g.fen();
+    save();
+    closeEditor();
+    if (mode === 'online') render();
+    else newGame();
+  });
+  document.getElementById('setup-cancel').addEventListener('click', () => {
+    closeEditor();
+    render();
+    if (!result && !drafting && seat(game.turn) === 'computer') computerTurn();
+  });
 
   // ---------------------------------------------------------------------------
   // Online games. The connection lives in online.js; these are its ways into the game.
@@ -894,9 +1623,9 @@
       promotionEl.hidden = true;
       render();
     },
-    begin(color, moves) {
+    begin(color, state) {
       waiting = false;
-      newGame(color, moves);
+      newGame(color, state);
     },
     resume() {
       waiting = false;
@@ -904,9 +1633,29 @@
     },
     move(message) {
       // Ignore anything that is not the friend's next move in this very game.
-      if (waiting || result || seat(game.turn) !== 'friend' || message.ply !== history.length) return;
+      if (waiting || result || drafting || seat(game.turn) !== 'friend' || message.ply !== history.length) return;
       const move = legal.find((m) => sameMove(m, message));
-      if (move) playMove(move);
+      if (move) playMove(move, undefined, false, message.clock);
+    },
+    chaosPick(message) {
+      const color = playerColor ^ 8, { round, pick } = message;
+      if (!chaos || result || typeof pick !== 'string' || !Number.isInteger(round)) return;
+      if (draft && draft.round === round) {
+        if (draft.picks[color] || !draft.offers[color].includes(pick)) return;
+        draft.picks[color] = pick;
+        if (draft.picks[playerColor]) nextPick();
+      } else if (round >= chaos.round) {
+        friendPicks[round] = pick;
+      }
+    },
+    timeout() {
+      // The friend's own page says their time ran out.
+      if (result || !clock) return;
+      const color = playerColor ^ 8;
+      stopClock();
+      clock.left[color] = 0;
+      finish(...timeoutResult(color));
+      render();
     },
     resign() {
       if (result || waiting) return;
@@ -919,7 +1668,15 @@
       render();
     },
     snapshot() {
-      return { moves: history.map(({ from, to, promo }) => ({ from, to, promo })), finished: Boolean(result) };
+      return { state: gameState(), finished: Boolean(result) };
+    },
+    // The rules for the next game this player hosts.
+    setup() {
+      return chosenSetup();
+    },
+    // What kind of game is on, for the online panel ('' for a classic one).
+    describe() {
+      return setupName(gameSetup);
     },
     preferredColor() {
       return sideEl.value === 'black' ? BLACK : WHITE;
@@ -948,6 +1705,7 @@
   // ---------------------------------------------------------------------------
 
   document.getElementById('new-game').addEventListener('click', () => newGame());
+  editPositionEl.addEventListener('click', openEditor);
   undoEl.addEventListener('click', undo);
   redoEl.addEventListener('click', redo);
   playAgainEl.addEventListener('click', () => {
@@ -962,7 +1720,7 @@
   reviewLastEl.addEventListener('click', startReview);
 
   resignEl.addEventListener('click', () => {
-    if (result || waiting) return;
+    if (result || waiting || editing) return;
     promotionEl.hidden = true;
     selected = -1;
     // On a shared screen it is the side to move that gives up.
@@ -1009,6 +1767,35 @@
   });
   modeEl.addEventListener('change', () => setMode(modeEl.value));
 
+  // The time controls of the chosen mode, if it has any.
+  function fillTimes() {
+    const times = VARIANTS[variant].times || [];
+    timeEl.replaceChildren(...times.map(([minutes, increment], index) => {
+      const option = document.createElement('option');
+      option.value = index;
+      option.textContent = timeName({ base: minutes * 60000, inc: increment * 1000 });
+      return option;
+    }));
+    if (times.length) timeEl.value = timeChoice[variant];
+  }
+
+  // A new mode starts a fresh game, except online, where it is the kind of game you host next.
+  // Choosing a custom position opens the editor.
+  variantEl.addEventListener('change', () => {
+    variant = variantEl.value;
+    fillTimes();
+    save();
+    if (mode !== 'online') newGame();
+    else render();
+    if (variant === 'custom') openEditor();
+  });
+  timeEl.addEventListener('change', () => {
+    timeChoice[variant] = Number(timeEl.value);
+    save();
+    if (mode !== 'online') newGame();
+  });
+
+  fillTimes();
   newGame();
   if (mode === 'online') {
     Online.open(onlineHooks);

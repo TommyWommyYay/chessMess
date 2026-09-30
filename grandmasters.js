@@ -74,10 +74,11 @@
     return ready;
   }
 
-  // The grandmaster's choice after the given moves from the starting position (in UCI notation,
-  // like "e2e4" or "e7e8q"). Requests wait their turn, since Stockfish thinks about one position at
-  // a time.
-  function bestMove(gm, moves) {
+  // The grandmaster's choice after `moves` (in UCI notation, like "e2e4" or "e7e8q") from `fen`, or
+  // from the usual starting position without one. `only` limits the choice to those moves (when some
+  // pieces are frozen in a chaos game) and `movetime` shortens the thinking (when short of time).
+  // Requests wait their turn, since Stockfish thinks about one position at a time.
+  function bestMove(gm, { fen = null, moves = [], only = null, movetime = THINK_MS } = {}) {
     const request = queue.then(() => start()).then(() => new Promise((resolve) => {
       listener = (line) => {
         if (!line.startsWith('bestmove')) return;
@@ -87,8 +88,9 @@
       };
       worker.postMessage('ucinewgame');
       worker.postMessage('setoption name Skill Level value ' + gm.skill);
-      worker.postMessage('position startpos' + (moves.length ? ' moves ' + moves.join(' ') : ''));
-      worker.postMessage('go movetime ' + THINK_MS);
+      worker.postMessage('position ' + (fen ? 'fen ' + fen : 'startpos') + (moves.length ? ' moves ' + moves.join(' ') : ''));
+      worker.postMessage('go movetime ' + Math.round(Math.max(100, Math.min(THINK_MS, movetime))) +
+        (only ? ' searchmoves ' + only.join(' ') : ''));
     }));
     queue = request.catch(() => {});
     return request;

@@ -155,7 +155,7 @@
 
   // Plays the saved moves through from the start, keeping every position along the way.
   function replay(record) {
-    const g = new Game();
+    const g = new Game(record.fen);
     const positions = [Game.restore(g.snapshot())], moves = [];
     for (const saved of record.moves) {
       const legal = g.legalMoves();
