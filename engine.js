@@ -531,18 +531,87 @@
       return choice;
     }
 
+    // ---------------------------------------------------------------------------
+    // Game review
+    // ---------------------------------------------------------------------------
+
+    const ANALYSIS_MS = 350, ANALYSIS_MAX_DEPTH = 5;
+
+    function sameMove(a, b) {
+      return a.from === b.from && a.to === b.to && (a.promo || 0) === (b.promo || 0);
+    }
+
+    // Judges one position of a finished game: the engine's best move there and what it is worth,
+    // and what the move actually played is worth when searched just as deeply. Scores are in
+    // centipawns for the side to move; mates are MATE minus the number of plies to the mate.
+    function analyse(g, played) {
+      const moves = orderMoves(g.legalMoves());
+      if (!moves.length) return { best: null, bestScore: g.inCheck() ? -MATE : 0, playedScore: null, options: 0 };
+      const ctx = { nodes: 0, stop: false, deadline: Infinity };
+      const start = Date.now();
+      let top = null, depth = 0;
+      for (let d = 1; d <= ANALYSIS_MAX_DEPTH; d++) {
+        // Two plies always finish, so that simple tactics are never missed; deeper passes are timed.
+        if (d > 2) ctx.deadline = start + ANALYSIS_MS;
+        const scored = searchRoot(g, moves, d, ctx, null, false);
+        if (!scored) break;
+        top = best(scored);
+        depth = d;
+        moves.splice(moves.indexOf(top.move), 1);
+        moves.unshift(top.move);
+        if (Math.abs(top.score) > MATE - 100) break;
+      }
+
+      let playedScore = null;
+      const move = played && moves.find((m) => sameMove(m, played));
+      if (move) {
+        playedScore = move === top.move ? top.score
+          : searchRoot(g, [move], depth, { nodes: 0, stop: false, deadline: Infinity }, null, true)[0].score;
+      }
+      const { from, to, promo } = top.move;
+      return { best: { from, to, promo }, bestScore: top.score, playedScore, options: moves.length };
+    }
+
+    // Standard algebraic notation (Nf3, exd5, O-O, e8=Q+) for a legal move in position g.
+    function moveToSan(g, m, legal = g.legalMoves()) {
+      const type = m.piece & 7;
+      let san;
+      if (m.flags & F_CASTLE) {
+        san = m.to > m.from ? 'O-O' : 'O-O-O';
+      } else if (type === PAWN) {
+        san = (m.captured ? squareName(m.from)[0] + 'x' : '') + squareName(m.to);
+        if (m.promo) san += '=' + ' PNBRQ'[m.promo];
+      } else {
+        // Name the starting file or rank when another piece of the same kind could also go there.
+        const rivals = legal.filter((o) => o.piece === m.piece && o.to === m.to && o.from !== m.from);
+        let from = '';
+        if (rivals.length) {
+          const name = squareName(m.from);
+          if (!rivals.some((o) => (o.from & 7) === (m.from & 7))) from = name[0];
+          else if (!rivals.some((o) => (o.from >> 3) === (m.from >> 3))) from = name[1];
+          else from = name;
+        }
+        san = ' PNBRQK'[type] + from + (m.captured ? 'x' : '') + squareName(m.to);
+      }
+      g.make(m);
+      const suffix = g.inCheck() ? (g.legalMoves().length ? '+' : '#') : '';
+      g.undo(m);
+      return san + suffix;
+    }
+
     return {
-      Game, chooseMove, evaluate, squareName, squareIndex, START_FEN,
+      Game, chooseMove, analyse, moveToSan, sameMove, evaluate, squareName, squareIndex, START_FEN, MATE,
       WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, F_EP, F_CASTLE,
     };
   }
 
-  // Runs inside a Web Worker so the page stays smooth while the computer thinks.
+  // Runs inside a Web Worker so the page stays smooth while the computer thinks or reviews a game.
   function workerMain(Chess) {
     self.onmessage = (event) => {
-      const { id, state, level, seen } = event.data;
-      const move = Chess.chooseMove(Chess.Game.restore(state), level, new Map(seen));
-      self.postMessage({ id, move });
+      const { id, type, state, level, seen, played } = event.data;
+      const game = Chess.Game.restore(state);
+      if (type === 'analyse') self.postMessage({ id, analysis: Chess.analyse(game, played) });
+      else self.postMessage({ id, move: Chess.chooseMove(game, level, new Map(seen)) });
     };
   }
 

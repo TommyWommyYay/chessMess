@@ -31,3 +31,28 @@ how do i actually run it dont do it for me
 [2026-09-30 11:24:33]
 make it so you can pick up and drag the chess pieces anywhere on the board
 
+[2026-09-30 11:31:22]
+add a dangling effect when youre holding a chess piece
+
+[2026-09-30 11:34:15]
+ add a dangling effect when youre holding a chess piece
+
+[2026-09-30 11:39:02]
+ add a dangling effect when youre holding a chess piece
+
+[2026-09-30 11:42:32]
+make it dangle like im holding the piece from the top
+
+[2026-09-30 11:45:38]
+its not dangling enough
+
+[2026-09-30 11:43:52]
+U working now?
+
+[2026-09-30 11:54:56]
+<ide_opened_file>The user opened the file c:\Users\tommy\chessMess\chessMess\prompts.txt in the IDE. This may or may not be related to the current task.</ide_opened_file>
+read my repo
+
+[2026-09-30 11:57:09]
+neaten it up, and also add the ability to review the previous game with an evalutaion bar, best moves, blunders, etc
+

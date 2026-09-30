@@ -10,6 +10,13 @@
   --gold: #fbbf24;
   --glass: rgba(255, 255, 255, 0.07);
   --glass-line: rgba(255, 255, 255, 0.16);
+  /* How a move is rated in the game review. */
+  --best: #34d399;
+  --excellent: #86efac;
+  --good: #a5b4cf;
+  --inaccuracy: #facc15;
+  --mistake: #fb923c;
+  --blunder: #f43f5e;
   --symbols: "Segoe UI Symbol", "Noto Sans Symbols 2", "Apple Symbols", "DejaVu Sans", sans-serif;
 }
 
@@ -368,7 +375,7 @@ h1 {
   box-shadow: inset 0 0 0 100px rgba(34, 211, 238, 0.35);
 }
 
-/* A piece that has been picked up: bigger, above every other square, and following the pointer. */
+/* The player's pieces can be picked up. */
 .square.mine {
   cursor: grab;
 }
@@ -377,6 +384,8 @@ h1 {
   cursor: grabbing;
 }
 
+/* A piece that has been picked up: bigger, above every other square, and following the pointer.
+   The longer selector outranks the hover lift; the shorter one keeps the look while it glides home. */
 .square.dragging {
   z-index: 5;
 }
@@ -388,7 +397,24 @@ h1 {
   animation: none;
   transition: none;
   transform: none;
-  will-change: translate;
+  /* It hangs from its top, so it swings from there. */
+  transform-origin: 50% 8%;
+  will-change: translate, rotate;
+}
+
+.square.dragging .piece::before {
+  content: "";
+  position: absolute;
+  z-index: 6;
+  top: -18%;
+  left: 50%;
+  width: 2px;
+  height: 22%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.55);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .square.drag-over {
@@ -397,6 +423,7 @@ h1 {
 
 .piece {
   position: relative;
+  display: inline-block;
   z-index: 1;
   transition: transform 0.15s ease;
 }
@@ -469,6 +496,71 @@ h1 {
 
 .square.dark .coord {
   color: #dfe4f8;
+}
+
+/* ---------- Board row: the evaluation bar (only in a review) and the board ---------- */
+
+.board-row {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.eval-bar {
+  position: relative;
+  display: none;
+  flex: none;
+  width: 30px;
+  height: var(--board-size);
+  overflow: hidden;
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  background: #1b1838;
+  box-shadow: 0 0 18px rgba(139, 92, 246, 0.35);
+}
+
+.eval-white {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: var(--white, 50%);
+  background: linear-gradient(90deg, #f1f3fd, #d4dbf3);
+  transition: height 0.5s cubic-bezier(0.25, 0.8, 0.3, 1);
+}
+
+/* Playing black, the board is upside down, so white's share fills from the top. */
+.eval-bar.flipped .eval-white {
+  top: 0;
+  bottom: auto;
+}
+
+/* The number sits at the end of whichever side is ahead. */
+.eval-text {
+  position: absolute;
+  right: 0;
+  bottom: 5px;
+  left: 0;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-align: center;
+  color: #15122e;
+}
+
+.eval-bar.black-ahead .eval-text,
+.eval-bar.flipped .eval-text {
+  top: 5px;
+  bottom: auto;
+}
+
+.eval-bar.black-ahead .eval-text {
+  color: #fff;
+}
+
+.eval-bar.flipped.black-ahead .eval-text {
+  top: auto;
+  bottom: 5px;
 }
 
 /* ---------- Overlays on the board (promotion, game over) ---------- */
@@ -548,6 +640,354 @@ h1 {
   box-shadow: 0 8px 22px rgba(34, 211, 238, 0.5);
 }
 
+/* ---------- Game review ---------- */
+
+main.reviewing {
+  --board-size: min(calc(100vw - 114px), 62vh, 560px);
+  --square: calc(var(--board-size) / 8);
+  width: calc(var(--board-size) + 90px);
+}
+
+main.reviewing .score,
+main.reviewing .status,
+main.reviewing .controls {
+  display: none;
+}
+
+main.reviewing .eval-bar,
+main.reviewing .arrows {
+  display: block;
+}
+
+main.reviewing .square {
+  cursor: default;
+}
+
+main.reviewing .board-wrap.lost .board {
+  filter: none;
+}
+
+/* On a wide screen the review panel sits beside the board, as tall as it. */
+@media (min-width: 940px) {
+  main.reviewing {
+    --board-size: min(calc(100vw - 470px), 74vh, 600px);
+    display: grid;
+    grid-template-columns: auto 320px;
+    column-gap: 24px;
+    width: auto;
+  }
+
+  main.reviewing h1 {
+    grid-column: 1 / -1;
+  }
+
+  main.reviewing .review {
+    height: var(--board-size);
+    margin-top: 0;
+  }
+
+  main.reviewing .review-moves {
+    max-height: none;
+  }
+}
+
+.arrows {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: none;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.arrows polygon {
+  fill: rgba(52, 211, 153, 0.82);
+  stroke: rgba(6, 78, 59, 0.6);
+  stroke-width: 0.02;
+  animation: fade-in 0.25s ease both;
+}
+
+/* The rating of the move just played, pinned to the corner of the square it landed on. */
+.badge {
+  position: absolute;
+  top: 3%;
+  right: 3%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-width: 36%;
+  height: 36%;
+  padding: 0 4%;
+  border-radius: 999px;
+  background: var(--kind);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45), 0 0 0 2px rgba(255, 255, 255, 0.85);
+  font: 800 calc(var(--square) * 0.19) / 1 system-ui, sans-serif;
+  color: #0b0a1f;
+  pointer-events: none;
+  animation: badge-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+
+@keyframes badge-in {
+  from { transform: scale(0); }
+}
+
+.kind-icon {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.6em;
+  height: 1.6em;
+  padding: 0 0.3em;
+  border-radius: 999px;
+  background: var(--kind);
+  font: 800 0.68rem / 1 system-ui, sans-serif;
+  color: #0b0a1f;
+  vertical-align: 0.1em;
+}
+
+:is(.badge, .kind-icon, .graph-dot).best { --kind: var(--best); }
+:is(.badge, .kind-icon, .graph-dot).excellent { --kind: var(--excellent); }
+:is(.badge, .kind-icon, .graph-dot).good,
+:is(.badge, .kind-icon, .graph-dot).forced { --kind: var(--good); }
+:is(.badge, .kind-icon, .graph-dot).inaccuracy { --kind: var(--inaccuracy); }
+:is(.badge, .kind-icon, .graph-dot).mistake { --kind: var(--mistake); }
+:is(.badge, .kind-icon, .graph-dot).blunder { --kind: var(--blunder); }
+
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  margin-top: 16px;
+}
+
+.review[hidden],
+.review-progress[hidden] {
+  display: none;
+}
+
+.review-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-head button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.review-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.review-result {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.review-progress {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  height: 24px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--glass);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.review-progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--done, 0%);
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.5), rgba(34, 211, 238, 0.5));
+  transition: width 0.3s ease;
+}
+
+.review-progress span {
+  position: relative;
+}
+
+.review-summary {
+  flex: none;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.review-summary th,
+.review-summary td {
+  padding: 2px 6px;
+  text-align: right;
+}
+
+.review-summary thead th {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.review-summary tbody th {
+  font-weight: 500;
+  text-align: left;
+  color: var(--muted);
+}
+
+.review-summary tr.accuracy td {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.review-summary tr.accuracy td:nth-child(2) {
+  color: #67e8f9;
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.5);
+}
+
+.review-summary tr.accuracy td:nth-child(3) {
+  color: #f9a8d4;
+  text-shadow: 0 0 14px rgba(244, 114, 182, 0.5);
+}
+
+.review-summary tr.none {
+  opacity: 0.4;
+}
+
+/* White's chance of winning through the game: white area below, the dark background above. */
+.review-graph {
+  position: relative;
+  flex: none;
+  height: 72px;
+  overflow: hidden;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  background: #15122e;
+  cursor: pointer;
+}
+
+.review-graph svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.graph-white {
+  fill: #e4e8fa;
+}
+
+.graph-middle,
+.graph-cursor {
+  vector-effect: non-scaling-stroke;
+}
+
+.graph-middle {
+  stroke: rgba(139, 92, 246, 0.7);
+  stroke-dasharray: 3 3;
+}
+
+.graph-cursor {
+  stroke: var(--cyan);
+  stroke-width: 2;
+}
+
+.graph-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--kind);
+  box-shadow: 0 0 0 1.5px #15122e;
+  pointer-events: none;
+}
+
+.review-comment {
+  flex: none;
+  min-height: 3.4em;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: var(--glass);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.review-moves {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  max-height: 220px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 0.88rem;
+  list-style: none;
+}
+
+.review-moves li {
+  display: grid;
+  grid-template-columns: 2.8em 1fr 1fr;
+  align-items: center;
+  border-radius: 8px;
+}
+
+.review-moves li:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.move-number {
+  padding-left: 6px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.move {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.move:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.move.current {
+  background: linear-gradient(120deg, rgba(139, 92, 246, 0.65), rgba(34, 211, 238, 0.45));
+}
+
+.move[data-kind="inaccuracy"] { color: #fde68a; }
+.move[data-kind="mistake"] { color: #fdba74; }
+.move[data-kind="blunder"] { color: #fda4af; }
+
+.move .kind-icon {
+  font-size: 0.6rem;
+}
+
+.review-nav {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
 /* ---------- Controls ---------- */
 
 .controls {
@@ -576,7 +1016,9 @@ button {
 
 .controls select,
 .controls button,
-.overlay-actions button {
+.overlay-actions button,
+.review-head button,
+.review-nav button {
   height: 38px;
   padding: 0 14px;
   border: 1px solid var(--glass-line);
@@ -596,14 +1038,18 @@ select option {
 
 .controls select:hover,
 .controls button:hover:not(:disabled),
-.overlay-actions button:hover {
+.overlay-actions button:hover,
+.review-head button:hover,
+.review-nav button:hover {
   transform: translateY(-2px);
   border-color: var(--violet);
   box-shadow: 0 8px 22px rgba(139, 92, 246, 0.45);
 }
 
 .controls button:active:not(:disabled),
-.overlay-actions button:active {
+.overlay-actions button:active,
+.review-head button:active,
+.review-nav button:active {
   transform: translateY(0) scale(0.96);
 }
 

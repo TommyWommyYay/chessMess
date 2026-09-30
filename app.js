@@ -7,6 +7,7 @@
   const GLYPHS = ['', '♟', '♞', '♝', '♜', '♛', '♚'].map((g) => g && g + '︎');
   const PIECE_NAMES = ['', 'pawn', 'knight', 'bishop', 'rook', 'queen', 'king'];
   const STORAGE_KEY = 'chessMess';
+  const LAST_GAME_KEY = 'chessMess.lastGame';
   const MOVE_MS = 300;
 
   const boardEl = document.getElementById('board');
@@ -18,37 +19,46 @@
   const difficultyEl = document.getElementById('difficulty');
   const sideEl = document.getElementById('side');
   const resignEl = document.getElementById('resign');
+  const reviewLastEl = document.getElementById('review-last');
   const scoreEls = {
     player: document.getElementById('score-player'),
     computer: document.getElementById('score-computer'),
     draws: document.getElementById('score-draws'),
   };
 
-  const saved = loadSaved();
+  const saved = load(STORAGE_KEY);
   const score = { player: saved.player || 0, computer: saved.computer || 0, draws: saved.draws || 0 };
   difficultyEl.value = ['easy', 'medium', 'hard'].includes(saved.difficulty) ? saved.difficulty : 'easy';
   sideEl.value = saved.side === 'black' ? 'black' : 'white';
 
-  let game, playerColor, legal, selected, lastMove, positions, result;
+  let game, playerColor, legal, selected, lastMove, positions, history, result;
+  let lastGame = load(LAST_GAME_KEY);
   let squareEls = [];
+  let flipped = false;      // the board is drawn from black's side
   let dealing = false;      // true while the pieces drop in at the start of a game
+  let reviewing = false;    // true while a finished game is being reviewed instead of played
   let turnToken = 0;        // bumped to cancel a computer move that is still being worked out
   let gameOverTimer = null;
 
-  function loadSaved() {
+  // Storage can be unavailable (e.g. in a private window); then things only last for this page load.
+  function load(key) {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+      return JSON.parse(localStorage.getItem(key)) || {};
     } catch {
       return {};
     }
   }
 
-  function save() {
+  function store(key, value) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...score, difficulty: difficultyEl.value, side: sideEl.value }));
+      localStorage.setItem(key, JSON.stringify(value));
     } catch {
-      // Storage unavailable (e.g. private window): the score just lasts for this page load.
+      // See load().
     }
+  }
+
+  function save() {
+    store(STORAGE_KEY, { ...score, difficulty: difficultyEl.value, side: sideEl.value });
   }
 
   // ---------------------------------------------------------------------------
@@ -115,6 +125,7 @@
     selected = -1;
     lastMove = null;
     result = null;
+    history = [];
     positions = new Map([[game.key(), 1]]);
     promotionEl.hidden = true;
     gameOverEl.hidden = true;
@@ -133,6 +144,16 @@
     turnToken++;
     score[winner === 'draw' ? 'draws' : winner]++;
     save();
+    // Kept so the game can be reviewed afterwards, even after the page is reloaded.
+    if (history.length) {
+      lastGame = {
+        moves: history.map(({ from, to, promo }) => ({ from, to, promo })),
+        player: playerColor === BLACK ? 'black' : 'white',
+        level: difficultyEl.value,
+        winner, result: message,
+      };
+      store(LAST_GAME_KEY, lastGame);
+    }
     // Let the final move (and any explosion) play out before announcing the result.
     gameOverTimer = setTimeout(() => {
       document.getElementById('game-over-title').textContent = title;
@@ -144,11 +165,13 @@
     }, 900);
   }
 
-  // `dropped` means the player dragged the piece onto its square, so it should not slide there again.
-  function playMove(move, dropped) {
+  // `drop` is set when the player dragged the piece onto its square, so it should not slide there
+  // again; it holds how far the piece was swinging when it was let go.
+  function playMove(move, drop) {
     const mover = game.turn;
     dealing = false;
     game.make(move);
+    history.push(move);
     lastMove = move;
     selected = -1;
     legal = game.legalMoves();
@@ -171,12 +194,16 @@
     }
 
     render();
-    animateMove(move, mover, dropped);
+    animateMove(move, mover, drop);
     if (!result && game.turn !== playerColor) computerTurn();
   }
 
+  function playerCanMove() {
+    return !reviewing && !result && game.turn === playerColor && promotionEl.hidden;
+  }
+
   function onSquareClick(sq) {
-    if (result || game.turn !== playerColor || !promotionEl.hidden) return;
+    if (!playerCanMove()) return;
     dealing = false;
     if (selected !== -1) {
       const moves = legal.filter((m) => m.from === selected && m.to === sq);
@@ -188,7 +215,7 @@
     render();
   }
 
-  function askPromotion(moves, dropped) {
+  function askPromotion(moves, drop) {
     promotionChoicesEl.replaceChildren(...moves.map((m) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -197,7 +224,7 @@
       button.append(pieceEl(playerColor | m.promo));
       button.addEventListener('click', () => {
         promotionEl.hidden = true;
-        playMove(m, dropped);
+        playMove(m, drop);
       });
       return button;
     }));
@@ -210,12 +237,55 @@
 
   let drag = null;
 
+  // A held piece hangs from the pointer like a pendulum. A spring pulls its angle towards a lean
+  // that trails the direction of travel; being underdamped, it overshoots and sways before settling.
+  const SWING_STIFFNESS = 95, SWING_DAMPING = 4.8;
+  const SWING_LEAN = 5.2;   // degrees of lean per square-per-second of sideways speed
+  const SWING_LIMIT = 58;
+  const DRAG_PIVOT_FROM_CENTER = 0.48; // square heights from the piece center up to its held top
+
+  function swing(now) {
+    if (!drag || !drag.lifted) return;
+    const dt = Math.min((now - drag.time) / 1000, 0.05);
+    if (dt > 0) {
+      const squaresPerSecond = (drag.x - drag.lastX) / dt / (boardEl.clientWidth / 8);
+      drag.time = now;
+      drag.lastX = drag.x;
+      // Pointer speed is jumpy from frame to frame, so smooth it before leaning into it.
+      drag.speed += (squaresPerSecond - drag.speed) * 0.35;
+      const lean = Math.max(-SWING_LIMIT, Math.min(SWING_LIMIT, drag.speed * SWING_LEAN));
+      drag.spin += (SWING_STIFFNESS * (lean - drag.angle) - SWING_DAMPING * drag.spin) * dt;
+      drag.angle += drag.spin * dt;
+      drag.piece.style.rotate = drag.angle.toFixed(2) + 'deg';
+      placeDraggedPiece();
+    }
+    requestAnimationFrame(swing);
+  }
+
+  function placeDraggedPiece() {
+    const home = squareEls[drag.sq].getBoundingClientRect();
+    const square = home.width;
+    const angle = drag.angle * Math.PI / 180;
+    const pivotX = Math.sin(angle) * square * 0.08;
+    const x = drag.x - home.left - home.width / 2 + pivotX;
+    const y = drag.y - home.top - home.height / 2 + square * DRAG_PIVOT_FROM_CENTER;
+    drag.piece.style.translate = `${x}px ${y}px`;
+  }
+
+  // The last of the swing dying away once a piece has been put down.
+  function settle(piece, angle) {
+    return piece.animate(
+      { rotate: [angle, -angle * 0.45, angle * 0.2, 0].map((a) => a.toFixed(2) + 'deg') },
+      { duration: 420, easing: 'ease-out' },
+    );
+  }
+
   function squareAt(x, y) {
     const box = boardEl.getBoundingClientRect();
     const col = Math.floor((x - box.left) / (box.width / 8));
     const row = Math.floor((y - box.top) / (box.height / 8));
     if (col < 0 || col > 7 || row < 0 || row > 7) return -1;
-    return playerColor === BLACK ? 63 - (row * 8 + col) : row * 8 + col;
+    return flipped ? 63 - (row * 8 + col) : row * 8 + col;
   }
 
   // The nearest point to the pointer that keeps a dragged piece on the board, a little in from the
@@ -232,7 +302,7 @@
   boardEl.addEventListener('pointerdown', (event) => {
     if (event.button !== 0 || drag) return;
     const sq = squareAt(event.clientX, event.clientY);
-    if (sq === -1 || result || game.turn !== playerColor || !promotionEl.hidden) return;
+    if (sq === -1 || !playerCanMove()) return;
     const piece = game.board[sq];
     // Pressing anything but one of the player's own pieces is a plain click: move there, or deselect.
     if (!piece || (piece & 8) !== playerColor) return onSquareClick(sq);
@@ -244,21 +314,28 @@
     drag = {
       sq, wasSelected, startX: event.clientX, startY: event.clientY,
       piece: squareEls[sq].querySelector('.piece'), lifted: false, over: null,
+      x: 0, y: 0, lastX: 0, time: 0, speed: 0, angle: 0, spin: 0,
     };
   });
 
   addEventListener('pointermove', (event) => {
     if (!drag) return;
+    const { x, y } = onBoard(event);
     if (!drag.lifted) {
       // A few pixels of slack, so that an ordinary click does not count as a drag.
       if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 5) return;
       drag.lifted = true;
       squareEls[drag.sq].classList.add('dragging');
       boardEl.classList.add('grabbing');
+      // Start the pendulum with a small kick so the piece visibly dangles as soon as it is lifted.
+      drag.lastX = x;
+      drag.time = performance.now();
+      drag.spin = 260;
+      requestAnimationFrame(swing);
     }
-    const { x, y } = onBoard(event);
-    const home = squareEls[drag.sq].getBoundingClientRect();
-    drag.piece.style.translate = `${x - home.left - home.width / 2}px ${y - home.top - home.height / 2}px`;
+    drag.x = x;
+    drag.y = y;
+    placeDraggedPiece();
     const over = squareEls[squareAt(x, y)];
     if (over !== drag.over) {
       if (drag.over) drag.over.classList.remove('drag-over');
@@ -269,7 +346,7 @@
 
   function endDrag(event) {
     if (!drag) return;
-    const { sq, wasSelected, piece, lifted, over } = drag;
+    const { sq, wasSelected, piece, lifted, over, angle } = drag;
     drag = null;
     boardEl.classList.remove('grabbing');
     if (over) over.classList.remove('drag-over');
@@ -288,18 +365,21 @@
     if (!moves.length) {
       // Not a legal square: the piece glides back to where it was picked up and stays selected.
       const home = squareEls[sq];
-      piece.animate({ translate: [piece.style.translate, '0px 0px'] }, { duration: 220, easing: 'cubic-bezier(0.25, 0.8, 0.3, 1)' })
-        .onfinish = () => home.classList.remove('dragging');
+      piece.animate({ translate: [piece.style.translate, '0px 0px'] }, { duration: 220, easing: 'cubic-bezier(0.25, 0.8, 0.3, 1)' });
+      settle(piece, angle).onfinish = () => home.classList.remove('dragging');
       piece.style.translate = '';
+      piece.style.rotate = '';
       return;
     }
     if (moves.length > 1) {
       // A promotion: leave the pawn sitting on the last rank while the player chooses a piece.
       const from = squareEls[sq].getBoundingClientRect(), target = squareEls[to].getBoundingClientRect();
       piece.style.translate = `${target.left - from.left}px ${target.top - from.top}px`;
-      return askPromotion(moves, true);
+      piece.style.rotate = '';
+      settle(piece, angle);
+      return askPromotion(moves, { angle: 0 });
     }
-    playMove(moves[0], true);
+    playMove(moves[0], { angle });
   }
 
   addEventListener('pointerup', endDrag);
@@ -315,7 +395,7 @@
     const piece = square.querySelector('.piece:not(.ghost)');
     if (!piece) return;
     const size = boardEl.clientWidth / 8;
-    const facing = playerColor === BLACK ? -1 : 1;
+    const facing = flipped ? -1 : 1;
     const dx = ((from & 7) - (to & 7)) * size * facing;
     const dy = ((from >> 3) - (to >> 3)) * size * facing;
     square.classList.add('moving');
@@ -325,18 +405,23 @@
     piece.animate({ scale: [1, 1.25, 1] }, { duration: MOVE_MS, easing: 'ease-in-out' });
   }
 
-  function animateMove(move, mover, dropped) {
-    if (dropped) {
-      // The piece is already there; just let it settle from its lifted size.
-      squareEls[move.to].querySelector('.piece').animate({ scale: [1.25, 1] }, { duration: 180, easing: 'ease-out' });
+  // When castling, the rook jumps over the king: from the corner to the square next to it.
+  function slideRook(move) {
+    if (!(move.flags & F_CASTLE)) return;
+    if (move.to > move.from) slide(move.to + 1, move.to - 1);
+    else slide(move.to - 2, move.to + 1);
+  }
+
+  function animateMove(move, mover, drop) {
+    if (drop) {
+      // The piece is already there; just let it settle from its lifted size and stop swinging.
+      const piece = squareEls[move.to].querySelector('.piece');
+      piece.animate({ scale: [1.25, 1] }, { duration: 180, easing: 'ease-out' });
+      settle(piece, drop.angle);
     } else {
       slide(move.from, move.to);
     }
-    if (move.flags & F_CASTLE) {
-      // The rook jumps over the king: from the corner to the square next to it.
-      if (move.to > move.from) slide(move.to + 1, move.to - 1);
-      else slide(move.to - 2, move.to + 1);
-    }
+    slideRook(move);
     if (!move.captured) return;
 
     // Keep the captured piece on its square until the attacker arrives, then blow it up.
@@ -360,7 +445,7 @@
         { transform: 'translate(3px, 3px)' },
         { transform: 'translate(0, 0)' },
       ], { duration: 380, easing: 'ease-out' });
-    }, dropped ? 0 : MOVE_MS * 0.6);
+    }, drop ? 0 : MOVE_MS * 0.6);
   }
 
   function pop(el) {
@@ -395,18 +480,18 @@
     return game.inCheck() ? 'You are in check — your move.' : 'Your move.';
   }
 
-  function render() {
-    const targets = new Set(legal.filter((m) => m.from === selected).map((m) => m.to));
-    const checkedKing = game.inCheck() ? game.kingSq[game.turn] : -1;
-    const flipped = playerColor === BLACK;
-    const playerToMove = !result && game.turn === playerColor;
+  // Draws a position onto the board and returns its squares, indexed by square number. The live
+  // game and the review both draw through here. `movable` is the color whose pieces can be picked up.
+  function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1 } = {}) {
+    const checkedKing = position.inCheck() ? position.kingSq[position.turn] : -1;
     const ordered = [];
+    flipped = flip;
     squareEls = [];
 
     for (let i = 0; i < 64; i++) {
-      const sq = flipped ? 63 - i : i;
+      const sq = flip ? 63 - i : i;
       const row = sq >> 3, col = sq & 7;
-      const piece = game.board[sq];
+      const piece = position.board[sq];
       const el = document.createElement('button');
       el.type = 'button';
       el.className = 'square ' + ((row + col) % 2 === 0 ? 'light' : 'dark');
@@ -416,7 +501,7 @@
       if (sq === checkedKing) el.classList.add('check');
       if (targets.has(sq)) el.classList.add('target');
       if (piece) el.classList.add('occupied');
-      if (piece && playerToMove && (piece & 8) === playerColor) el.classList.add('mine');
+      if (piece && (piece & 8) === movable) el.classList.add('mine');
 
       let label = squareName(sq);
       if (piece) {
@@ -438,9 +523,22 @@
       squareEls[sq] = el;
     }
 
-    boardEl.classList.toggle('dealing', dealing);
     boardEl.replaceChildren(...ordered);
+    return squareEls;
+  }
+
+  function render() {
+    if (reviewing) return;
+    boardEl.classList.toggle('dealing', dealing);
+    drawBoard(game, {
+      flip: playerColor === BLACK,
+      lastMove,
+      selected,
+      targets: new Set(legal.filter((m) => m.from === selected).map((m) => m.to)),
+      movable: playerCanMove() ? playerColor : -1,
+    });
     resignEl.disabled = Boolean(result);
+    reviewLastEl.disabled = !lastGame.moves;
 
     const text = statusText();
     if (statusEl.textContent !== text) {
@@ -460,6 +558,39 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Review of the last finished game. The review itself lives in review.js; this lends it the
+  // board and puts the live game back afterwards.
+  // ---------------------------------------------------------------------------
+
+  function startReview() {
+    if (!lastGame.moves) return;
+    reviewing = true;
+    turnToken++;
+    clearTimeout(gameOverTimer);
+    FX.stop();
+    drag = null;
+    selected = -1;
+    promotionEl.hidden = true;
+    gameOverEl.hidden = true;
+    boardEl.classList.remove('dealing', 'grabbing');
+    Review.open(lastGame, {
+      draw: drawBoard,
+      slide(move) {
+        slide(move.from, move.to);
+        slideRook(move);
+      },
+      save(record) {
+        if (record === lastGame) store(LAST_GAME_KEY, lastGame);
+      },
+      close() {
+        reviewing = false;
+        render();
+        if (!result && game.turn !== playerColor) computerTurn();
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Controls
   // ---------------------------------------------------------------------------
 
@@ -468,6 +599,8 @@
   document.getElementById('view-board').addEventListener('click', () => {
     gameOverEl.hidden = true;
   });
+  document.getElementById('review-game').addEventListener('click', startReview);
+  reviewLastEl.addEventListener('click', startReview);
 
   resignEl.addEventListener('click', () => {
     if (result) return;
