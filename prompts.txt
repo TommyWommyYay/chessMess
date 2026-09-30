@@ -107,3 +107,15 @@ have you pushed these edits
 [2026-09-30 14:11:00]
 yes
 
+[2026-09-30 14:12:50]
+it only goes up to 2400
+
+[2026-09-30 14:19:24]
+th
+
+[2026-09-30 14:20:40]
+can you add a section on the left of the chessboard where you can select what grandmaster you want to verse. add the top 10 grandmasters as chooseable opponents when you vs the computer.
+
+[2026-09-30 14:28:52]
+push these changes
+

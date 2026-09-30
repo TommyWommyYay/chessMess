@@ -18,6 +18,12 @@
   <main>
     <h1><span class="logo">♞&#xFE0E;</span> chessMess</h1>
 
+    <aside id="opponents" class="opponents" aria-label="Choose your opponent">
+      <h2>Opponent</h2>
+      <div id="opponent-list" class="opponent-list" role="radiogroup" aria-label="Opponent"></div>
+      <p id="opponents-note" class="opponents-note"></p>
+    </aside>
+
     <section class="score" aria-label="Score">
       <div><span class="score-value" id="score-me">0</span><span class="score-label" id="score-me-label">You</span></div>
       <div><span class="score-value" id="score-draws">0</span><span class="score-label">Draws</span></div>
@@ -124,7 +130,7 @@
         </label>
       </div>
       <div id="rating-field" class="controls-row rating-row">
-        <label class="rating-slider">Computer rating
+        <label class="rating-slider">Custom rating
           <input id="rating" type="range" min="400" max="2400" step="100" value="1200">
         </label>
         <p class="rating-readout">
@@ -146,7 +152,7 @@
 
   <script src="engine.js"></script>
   <script src="fx.js"></script>
-  <script src="magnus.js"></script>
+  <script src="grandmasters.js"></script>
   <script src="review.js"></script>
   <script src="online.js"></script>
   <script src="app.js"></script>

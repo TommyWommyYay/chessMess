@@ -13,13 +13,7 @@
   const START_RATING = 1200;
   const RATING_K = 32;      // how far one game can move your rating (the usual Elo K-factor)
   // What the computer's rating slider means, from the bottom up.
-  const RATING_NAMES = [[400, 'Beginner'], [800, 'Casual'], [1200, 'Club player'], [1600, 'Strong'], [2000, 'Expert'], [2300, 'Master'],
-    [2850, 'Magnus Carlsen']];
-  // The slider's last stop, one step past our own engine's top rating, is the Magnus level:
-  // Stockfish at full strength (see magnus.js), rated like Magnus himself.
-  const MAGNUS_RATING = 2850;
-  const MAGNUS_STOP = MAX_RATING + 100;
-  const MAGNUS_THINK_MS = 2000;
+  const RATING_NAMES = [[400, 'Beginner'], [800, 'Casual'], [1200, 'Club player'], [1600, 'Strong'], [2000, 'Expert'], [2300, 'Master']];
 
   const boardEl = document.getElementById('board');
   const boardWrapEl = document.getElementById('board-wrap');
@@ -30,6 +24,8 @@
   const mainEl = document.querySelector('main');
   const modeEl = document.getElementById('mode');
   const ratingEl = document.getElementById('rating');
+  const opponentListEl = document.getElementById('opponent-list');
+  const opponentNoteEl = document.getElementById('opponents-note');
   const sideEl = document.getElementById('side');
   const nameEls = {
     me: document.getElementById('name'),
@@ -58,8 +54,10 @@
   modeEl.value = joinCode ? 'online' : MODES.includes(saved.mode) ? saved.mode : 'computer';
   // (Before the slider there were three difficulties.)
   const OLD_LEVELS = { easy: 600, medium: 1200, hard: 2000 };
-  ratingEl.max = MAGNUS_STOP;
-  setSlider(clampRating(saved.rating ?? OLD_LEVELS[saved.difficulty] ?? START_RATING));
+  ratingEl.value = clampRating(saved.rating ?? OLD_LEVELS[saved.difficulty] ?? START_RATING);
+  // Who you play in computer mode: 'custom' (our engine, at the slider's rating) or a grandmaster's
+  // id. (A saved rating of 2850 was the slider's old Magnus stop.)
+  let opponent = Grandmasters.find(saved.opponent) ? saved.opponent : saved.rating >= 2800 ? 'carlsen' : 'custom';
   sideEl.value = saved.side === 'black' ? 'black' : 'white';
   const names = { me: '', white: '', black: '', ...saved.names };
   for (const key of Object.keys(nameEls)) nameEls[key].value = names[key] = cleanName(names[key]);
@@ -74,8 +72,9 @@
   let reviewing = false;    // true while a finished game is being reviewed instead of played
   let waiting = false;      // an online game that has not started, or whose friend has dropped out
   let waitingText = '';
+  let gameGm = null;        // the grandmaster being played, if any
   let gameRating = sliderRating();   // the computer's rating for the game being played
-  let magnusFailed = false; // Stockfish could not be loaded, so the Magnus level falls back to 2400
+  let stockfishFailed = false;       // Stockfish could not be loaded, so grandmasters play as our 2400
   let friendName = '';      // the online friend's name, once they have sent it
   let turnToken = 0;        // bumped to cancel a computer move that is still being worked out
   let gameOverTimer = null;
@@ -98,20 +97,15 @@
   }
 
   function save() {
-    store(STORAGE_KEY, { scores, mode, rating: sliderRating(), myRating, names, side: sideEl.value });
+    store(STORAGE_KEY, { scores, mode, opponent, rating: sliderRating(), myRating, names, side: sideEl.value });
   }
 
   function clampRating(value) {
-    if (Number(value) >= MAGNUS_RATING) return MAGNUS_RATING;
     return Math.min(MAX_RATING, Math.max(MIN_RATING, Math.round(Number(value) / 100) * 100 || START_RATING));
   }
 
   function sliderRating() {
-    return Number(ratingEl.value) >= MAGNUS_STOP ? MAGNUS_RATING : Number(ratingEl.value);
-  }
-
-  function setSlider(rating) {
-    ratingEl.value = rating >= MAGNUS_RATING ? MAGNUS_STOP : rating;
+    return Number(ratingEl.value);
   }
 
   function cleanName(text) {
@@ -125,7 +119,7 @@
   // The two score columns, and the review's: this screen's player (or white) first.
   function columnNames() {
     if (mode === 'local') return [names.white || 'White', names.black || 'Black'];
-    if (mode === 'computer') return [names.me || 'You', gameRating === MAGNUS_RATING ? 'Magnus (2850)' : `Computer (${gameRating})`];
+    if (mode === 'computer') return [names.me || 'You', `${gameGm ? gameGm.name.split(' ').pop() : 'Computer'} (${gameRating})`];
     return [names.me || 'You', friendName || 'Friend'];
   }
 
@@ -138,7 +132,7 @@
   // How messages refer to a side.
   function sideName(color) {
     if (mode === 'local') return (color === WHITE ? names.white : names.black) || (color === WHITE ? 'white' : 'black');
-    return { me: 'you', computer: 'the computer', friend: friendName || 'your friend' }[seat(color)];
+    return { me: 'you', computer: gameGm ? gameGm.name : 'the computer', friend: friendName || 'your friend' }[seat(color)];
   }
 
   const capitalise = (text) => text[0].toUpperCase() + text.slice(1);
@@ -172,7 +166,7 @@
   }
 
   function think() {
-    if (gameRating === MAGNUS_RATING && !magnusFailed) return thinkLikeMagnus();
+    if (gameGm && !stockfishFailed) return thinkLikeGrandmaster();
     return thinkOurselves(Math.min(gameRating, MAX_RATING));
   }
 
@@ -188,16 +182,16 @@
     });
   }
 
-  function thinkLikeMagnus() {
+  function thinkLikeGrandmaster() {
     const current = game, moves = history.map(moveToUci);
-    return Magnus.bestMove(moves, MAGNUS_THINK_MS).then(
+    return Grandmasters.bestMove(gameGm, moves).then(
       (uci) => {
         if (current !== game) return null;
         return legal.find((m) => moveToUci(m) === uci) || thinkOurselves(MAX_RATING);
       },
       () => {
         // Stockfish is fetched from the internet; without it, play our own engine's best.
-        magnusFailed = true;
+        stockfishFailed = true;
         render();
         return current === game ? thinkOurselves(MAX_RATING) : null;
       },
@@ -226,7 +220,8 @@
     FX.stop();
     game = new Game();
     playerColor = mode === 'local' ? WHITE : color ?? (sideEl.value === 'black' ? BLACK : WHITE);
-    gameRating = sliderRating();
+    gameGm = mode === 'computer' ? Grandmasters.find(opponent) : null;
+    gameRating = gameGm ? gameGm.rating : sliderRating();
     selected = -1;
     lastMove = null;
     result = null;
@@ -266,6 +261,7 @@
         player: playerColor === BLACK ? 'black' : 'white',
         opponent: mode,
         level: gameRating,
+        opponentName: gameGm ? gameGm.name : undefined,
         names: columnNames(),
         result: message,
       };
@@ -628,7 +624,7 @@
     if (result) return result;
     if (waiting) return waitingText;
     const who = seat(game.turn), check = game.inCheck();
-    if (who === 'computer') return 'Computer is thinking';
+    if (who === 'computer') return `${gameGm ? gameGm.name : 'Computer'} is thinking`;
     if (who === 'friend') return `${capitalise(sideName(game.turn))} is thinking`;
     if (mode === 'local') {
       const name = sideName(game.turn);
@@ -722,15 +718,61 @@
   function renderRating() {
     const chosen = sliderRating();
     document.getElementById('rating-value').textContent = chosen;
-    // A new rating for the computer takes over from the next game, unless this one has not begun.
-    const later = chosen !== gameRating;
-    let note = later ? ' · from your next game' : '';
-    if (chosen === MAGNUS_RATING) note += magnusFailed ? ' · Stockfish did not load (offline?), so playing at 2400' : ' · Stockfish at full strength';
-    document.getElementById('rating-name').textContent = ratingName(chosen) + note;
+    // A new rating takes over from the next game, unless this one has not begun.
+    const later = opponent === 'custom' && (gameGm || chosen !== gameRating);
+    document.getElementById('rating-name').textContent = ratingName(chosen) + (later ? ' · from your next game' : '');
     document.getElementById('my-rating').textContent = myRating;
     // The filled part of the slider track.
-    ratingEl.style.setProperty('--fill', ((ratingEl.value - MIN_RATING) / (MAGNUS_STOP - MIN_RATING) * 100) + '%');
-    document.getElementById('rating-field').classList.toggle('magnus', chosen === MAGNUS_RATING);
+    ratingEl.style.setProperty('--fill', ((chosen - MIN_RATING) / (MAX_RATING - MIN_RATING) * 100) + '%');
+    renderOpponents();
+  }
+
+  // The opponent panel beside the board: a card for our own engine at the slider's rating, and one
+  // for each grandmaster.
+  function renderOpponents() {
+    if (!opponentListEl.children.length) {
+      const custom = { id: 'custom', name: 'Custom', initials: '⚙' };
+      opponentListEl.append(...[custom, ...Grandmasters.LIST].map((gm) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'opponent';
+        card.dataset.id = gm.id;
+        card.setAttribute('role', 'radio');
+        const avatar = document.createElement('span');
+        avatar.className = 'opponent-avatar';
+        avatar.textContent = gm.initials;
+        // A color of its own for each player, spread around the color wheel.
+        if (gm.rank) avatar.style.setProperty('--hue', (gm.rank * 137) % 360);
+        const name = document.createElement('span');
+        name.className = 'opponent-name';
+        name.textContent = gm.name;
+        const detail = document.createElement('span');
+        detail.className = 'opponent-detail';
+        if (gm.rank) detail.textContent = `#${gm.rank} · ${gm.country} · ${gm.rating}`;
+        card.append(avatar, name, detail);
+        card.addEventListener('click', () => chooseOpponent(gm.id));
+        return card;
+      }));
+    }
+    for (const card of opponentListEl.children) {
+      const chosen = card.dataset.id === opponent;
+      card.classList.toggle('chosen', chosen);
+      card.setAttribute('aria-checked', String(chosen));
+      if (card.dataset.id === 'custom') {
+        card.querySelector('.opponent-detail').textContent = `Our engine · ${sliderRating()} (slider below)`;
+      }
+    }
+    opponentNoteEl.textContent = stockfishFailed
+      ? 'Stockfish could not be loaded (offline?), so the grandmasters are playing as our own engine at 2400 for now.'
+      : `The top 10 of FIDE's ${Grandmasters.LIST_DATE} rating list, played by the Stockfish engine at a strength to match each rating (not their personal style).`;
+  }
+
+  // Picking an opponent starts a game against them.
+  function chooseOpponent(id) {
+    opponent = id;
+    stockfishFailed = false;
+    save();
+    newGame();
   }
 
   // ---------------------------------------------------------------------------
@@ -862,8 +904,11 @@
 
   ratingEl.addEventListener('input', () => {
     // Before the first move it can still change who you are playing.
-    if (mode === 'computer' && !history.length && !result) gameRating = sliderRating();
-    magnusFailed = false;
+    opponent = 'custom';
+    if (mode === 'computer' && !history.length && !result) {
+      gameGm = null;
+      gameRating = sliderRating();
+    }
     save();
     render();
   });
