@@ -56,3 +56,12 @@ read my repo
 [2026-09-30 11:57:09]
 neaten it up, and also add the ability to review the previous game with an evalutaion bar, best moves, blunders, etc
 
+[2026-09-30 12:15:26]
+how can we go about doing it online e.g we can switch from player vs player to player vs computer. So for example i can verse my friend
+
+[2026-09-30 12:16:10]
+which one is the easiest
+
+[2026-09-30 12:16:19]
+okay please do that
+

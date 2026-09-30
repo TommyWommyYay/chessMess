@@ -19,9 +19,9 @@
     <h1><span class="logo">♞&#xFE0E;</span> chessMess</h1>
 
     <section class="score" aria-label="Score">
-      <div><span class="score-value" id="score-player">0</span><span class="score-label">You</span></div>
+      <div><span class="score-value" id="score-me">0</span><span class="score-label" id="score-me-label">You</span></div>
       <div><span class="score-value" id="score-draws">0</span><span class="score-label">Draws</span></div>
-      <div><span class="score-value" id="score-computer">0</span><span class="score-label">Computer</span></div>
+      <div><span class="score-value" id="score-them">0</span><span class="score-label" id="score-them-label">Computer</span></div>
     </section>
 
     <p id="status" class="status" role="status"></p>
@@ -83,24 +83,40 @@
       </div>
     </section>
 
+    <section id="online" class="online" aria-label="Online game" aria-live="polite" hidden>
+      <p id="online-text" class="online-text"></p>
+      <div id="online-actions" class="online-actions"></div>
+    </section>
+
     <section class="controls">
-      <label>Difficulty
-        <select id="difficulty">
-          <option value="easy">Easy</option>
-          <option value="medium">Medium</option>
-          <option value="hard">Hard</option>
-        </select>
-      </label>
-      <label>Play as
-        <select id="side">
-          <option value="white">White</option>
-          <option value="black">Black</option>
-        </select>
-      </label>
-      <button id="new-game" type="button" class="primary">New game</button>
-      <button id="resign" type="button">Resign</button>
-      <button id="review-last" type="button">Review last game</button>
-      <button id="reset-score" type="button" class="quiet">Reset score</button>
+      <div class="controls-row">
+        <label>Opponent
+          <select id="mode">
+            <option value="computer">Computer</option>
+            <option value="local">Friend, same screen</option>
+            <option value="online">Friend, online</option>
+          </select>
+        </label>
+        <label id="difficulty-field">Difficulty
+          <select id="difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium">Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </label>
+        <label id="side-field">Play as
+          <select id="side">
+            <option value="white">White</option>
+            <option value="black">Black</option>
+          </select>
+        </label>
+      </div>
+      <div class="controls-row">
+        <button id="new-game" type="button" class="primary">New game</button>
+        <button id="resign" type="button">Resign</button>
+        <button id="review-last" type="button">Review last game</button>
+        <button id="reset-score" type="button" class="quiet">Reset score</button>
+      </div>
     </section>
   </main>
 
@@ -109,6 +125,7 @@
   <script src="engine.js"></script>
   <script src="fx.js"></script>
   <script src="review.js"></script>
+  <script src="online.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

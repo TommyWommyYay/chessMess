@@ -193,12 +193,12 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
-#score-player {
+#score-me {
   color: #67e8f9;
   text-shadow: 0 0 16px rgba(34, 211, 238, 0.6);
 }
 
-#score-computer {
+#score-them {
   color: #f9a8d4;
   text-shadow: 0 0 16px rgba(244, 114, 182, 0.6);
 }
@@ -640,6 +640,85 @@ h1 {
   box-shadow: 0 8px 22px rgba(34, 211, 238, 0.5);
 }
 
+/* Only the choices that matter against the chosen opponent. */
+main:not([data-mode="computer"]) #difficulty-field,
+main[data-mode="local"] #side-field,
+main[data-mode="online"] #new-game {
+  display: none;
+}
+
+/* ---------- Online game panel ---------- */
+
+.online {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-line);
+  border-radius: 14px;
+  background: var(--glass);
+}
+
+.online[hidden] {
+  display: none;
+}
+
+.online-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.online-text strong {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  letter-spacing: 0.08em;
+  color: #67e8f9;
+}
+
+.online-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.online-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.online-actions:empty {
+  display: none;
+}
+
+.online input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  font: inherit;
+  color: var(--text);
+}
+
+.online input:focus-visible {
+  border-color: var(--violet);
+  outline: none;
+}
+
+.online input.code {
+  width: 7.5em;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  letter-spacing: 0.1em;
+}
+
+.online input.link {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
 /* ---------- Game review ---------- */
 
 main.reviewing {
@@ -650,7 +729,8 @@ main.reviewing {
 
 main.reviewing .score,
 main.reviewing .status,
-main.reviewing .controls {
+main.reviewing .controls,
+main.reviewing .online {
   display: none;
 }
 
@@ -991,15 +1071,21 @@ main.reviewing .board-wrap.lost .board {
 /* ---------- Controls ---------- */
 
 .controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  display: grid;
   gap: 10px;
   margin-top: 20px;
 }
 
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
 .controls label {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 4px;
   font-size: 0.72rem;
@@ -1016,6 +1102,7 @@ button {
 
 .controls select,
 .controls button,
+.online-actions button,
 .overlay-actions button,
 .review-head button,
 .review-nav button {
@@ -1038,6 +1125,7 @@ select option {
 
 .controls select:hover,
 .controls button:hover:not(:disabled),
+.online-actions button:hover,
 .overlay-actions button:hover,
 .review-head button:hover,
 .review-nav button:hover {
@@ -1047,6 +1135,7 @@ select option {
 }
 
 .controls button:active:not(:disabled),
+.online-actions button:active,
 .overlay-actions button:active,
 .review-head button:active,
 .review-nav button:active {

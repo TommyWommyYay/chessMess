@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const { Game, chooseMove, squareName, WHITE, BLACK, F_EP, F_CASTLE } = Chess;
+  const { Game, chooseMove, sameMove, squareName, WHITE, BLACK, F_EP, F_CASTLE } = Chess;
 
   // Solid glyphs for both sides (coloured in CSS); U+FE0E stops the pawn rendering as an emoji.
   const GLYPHS = ['', '♟', '♞', '♝', '♜', '♛', '♚'].map((g) => g && g + '︎');
@@ -16,27 +16,47 @@
   const promotionEl = document.getElementById('promotion');
   const promotionChoicesEl = document.getElementById('promotion-choices');
   const gameOverEl = document.getElementById('game-over');
+  const mainEl = document.querySelector('main');
+  const modeEl = document.getElementById('mode');
   const difficultyEl = document.getElementById('difficulty');
   const sideEl = document.getElementById('side');
   const resignEl = document.getElementById('resign');
   const reviewLastEl = document.getElementById('review-last');
+  const playAgainEl = document.getElementById('play-again');
   const scoreEls = {
-    player: document.getElementById('score-player'),
-    computer: document.getElementById('score-computer'),
+    me: document.getElementById('score-me'),
+    them: document.getElementById('score-them'),
     draws: document.getElementById('score-draws'),
   };
 
+  // Who the two score columns belong to in each mode. Same-screen games keep white's and black's.
+  const MODES = {
+    computer: { me: 'You', them: 'Computer' },
+    local: { me: 'White', them: 'Black' },
+    online: { me: 'You', them: 'Friend' },
+  };
+
   const saved = load(STORAGE_KEY);
-  const score = { player: saved.player || 0, computer: saved.computer || 0, draws: saved.draws || 0 };
+  const blankScore = () => ({ me: 0, them: 0, draws: 0 });
+  const scores = { computer: blankScore(), local: blankScore(), online: blankScore(), ...saved.scores };
+  if (!saved.scores && saved.player !== undefined) {
+    // Saved before there were other opponents than the computer.
+    scores.computer = { me: saved.player || 0, them: saved.computer || 0, draws: saved.draws || 0 };
+  }
+  const joinCode = new URLSearchParams(location.search).get('join');
+  modeEl.value = joinCode ? 'online' : MODES[saved.mode] ? saved.mode : 'computer';
   difficultyEl.value = ['easy', 'medium', 'hard'].includes(saved.difficulty) ? saved.difficulty : 'easy';
   sideEl.value = saved.side === 'black' ? 'black' : 'white';
 
+  let mode = modeEl.value;  // 'computer', 'local' (two players on this screen) or 'online'
   let game, playerColor, legal, selected, lastMove, positions, history, result;
   let lastGame = load(LAST_GAME_KEY);
   let squareEls = [];
   let flipped = false;      // the board is drawn from black's side
   let dealing = false;      // true while the pieces drop in at the start of a game
   let reviewing = false;    // true while a finished game is being reviewed instead of played
+  let waiting = false;      // an online game that has not started, or whose friend has dropped out
+  let waitingText = '';
   let turnToken = 0;        // bumped to cancel a computer move that is still being worked out
   let gameOverTimer = null;
 
@@ -58,8 +78,22 @@
   }
 
   function save() {
-    store(STORAGE_KEY, { ...score, difficulty: difficultyEl.value, side: sideEl.value });
+    store(STORAGE_KEY, { scores, mode, difficulty: difficultyEl.value, side: sideEl.value });
   }
+
+  // Who moves the pieces of a color: 'me' (this screen), 'computer' or 'friend' (online).
+  function seat(color) {
+    if (mode === 'local' || color === playerColor) return 'me';
+    return mode === 'computer' ? 'computer' : 'friend';
+  }
+
+  // How messages refer to a side.
+  function sideName(color) {
+    if (mode === 'local') return color === WHITE ? 'white' : 'black';
+    return { me: 'you', computer: 'the computer', friend: 'your friend' }[seat(color)];
+  }
+
+  const capitalise = (text) => text[0].toUpperCase() + text.slice(1);
 
   // ---------------------------------------------------------------------------
   // Computer opponent. It thinks in a worker so the animations never stall; if a worker
@@ -115,54 +149,92 @@
   // Game flow
   // ---------------------------------------------------------------------------
 
-  function newGame() {
+  // Starts a game with this screen's player on `color` (for an online game, the color the host
+  // picked; otherwise the "Play as" choice). `moves` are already played, when an online game is
+  // picked up again after a dropped connection.
+  function newGame(color, moves = []) {
     turnToken++;
     clearTimeout(gameOverTimer);
     FX.stop();
     game = new Game();
-    playerColor = sideEl.value === 'black' ? BLACK : WHITE;
-    legal = game.legalMoves();
+    playerColor = mode === 'local' ? WHITE : color ?? (sideEl.value === 'black' ? BLACK : WHITE);
     selected = -1;
     lastMove = null;
     result = null;
     history = [];
     positions = new Map([[game.key(), 1]]);
+    for (const saved of moves) {
+      const move = game.legalMoves().find((m) => sameMove(m, saved));
+      if (!move) break;
+      record(move);
+    }
+    legal = game.legalMoves();
     promotionEl.hidden = true;
     gameOverEl.hidden = true;
     boardWrapEl.classList.remove('lost');
-    dealing = true;
+    dealing = !moves.length;
     render();
     const token = turnToken;
     setTimeout(() => {
       if (token === turnToken) dealing = false;
     }, 1200);
-    if (game.turn !== playerColor) computerTurn();
+    if (seat(game.turn) === 'computer') computerTurn();
   }
 
-  function finish(winner, title, message) {
+  // `winner` is a color, or null for a draw.
+  function finish(winner, message) {
     result = message;
     turnToken++;
-    score[winner === 'draw' ? 'draws' : winner]++;
+    const iWon = winner !== null && seat(winner) === 'me';
+    const column = winner === null ? 'draws' : (mode === 'local' ? winner === WHITE : iWon) ? 'me' : 'them';
+    scores[mode][column]++;
     save();
     // Kept so the game can be reviewed afterwards, even after the page is reloaded.
     if (history.length) {
       lastGame = {
         moves: history.map(({ from, to, promo }) => ({ from, to, promo })),
         player: playerColor === BLACK ? 'black' : 'white',
+        opponent: mode,
         level: difficultyEl.value,
-        winner, result: message,
+        result: message,
       };
       store(LAST_GAME_KEY, lastGame);
     }
+    if (mode === 'online') Online.gameOver();
+
+    let title = 'Draw', mood = 'draw';
+    if (winner !== null && mode === 'local') [title, mood] = [capitalise(sideName(winner)) + ' wins!', 'win'];
+    else if (winner !== null) [title, mood] = iWon ? ['You win!', 'win'] : ['Defeat', 'loss'];
     // Let the final move (and any explosion) play out before announcing the result.
     gameOverTimer = setTimeout(() => {
       document.getElementById('game-over-title').textContent = title;
       document.getElementById('game-over-text').textContent = message;
-      gameOverEl.className = 'overlay ' + (winner === 'player' ? 'win' : winner === 'computer' ? 'loss' : 'draw');
+      playAgainEl.textContent = mode === 'online' ? 'Rematch' : 'Play again';
+      gameOverEl.className = 'overlay ' + mood;
       gameOverEl.hidden = false;
-      if (winner === 'player') FX.celebrate();
-      if (winner === 'computer') boardWrapEl.classList.add('lost');
+      if (mood === 'win') FX.celebrate();
+      if (mood === 'loss') boardWrapEl.classList.add('lost');
     }, 900);
+  }
+
+  function resignText(loser) {
+    const winner = sideName(loser ^ 8);
+    return `${capitalise(sideName(loser))} resigned — ${winner} ${winner === 'you' ? 'win' : 'wins'}.`;
+  }
+
+  function checkmateText(winner) {
+    if (mode !== 'local' && seat(winner) === 'me') return `Checkmate — you beat ${sideName(winner ^ 8)}.`;
+    return `Checkmate — ${sideName(winner)} wins.`;
+  }
+
+  // Makes a move on the board without any of the presentation; returns the new position's key.
+  function record(move) {
+    game.make(move);
+    history.push(move);
+    lastMove = move;
+    const key = game.key();
+    positions.set(key, (positions.get(key) || 0) + 1);
+    return key;
   }
 
   // `drop` is set when the player dragged the piece onto its square, so it should not slide there
@@ -170,36 +242,30 @@
   function playMove(move, drop) {
     const mover = game.turn;
     dealing = false;
-    game.make(move);
-    history.push(move);
-    lastMove = move;
+    const key = record(move);
     selected = -1;
     legal = game.legalMoves();
-    const key = game.key();
-    positions.set(key, (positions.get(key) || 0) + 1);
+    if (mode === 'online' && seat(mover) === 'me') Online.sendMove(move, history.length - 1);
 
     if (!legal.length) {
-      if (game.inCheck()) {
-        if (mover === playerColor) finish('player', 'You win!', 'Checkmate — you beat the computer.');
-        else finish('computer', 'Defeat', 'Checkmate — the computer wins.');
-      } else {
-        finish('draw', 'Draw', 'Stalemate — no legal moves left.');
-      }
+      if (game.inCheck()) finish(mover, checkmateText(mover));
+      else finish(null, 'Stalemate — no legal moves left.');
     } else if (game.insufficientMaterial()) {
-      finish('draw', 'Draw', 'Not enough pieces left to checkmate.');
+      finish(null, 'Not enough pieces left to checkmate.');
     } else if (positions.get(key) >= 3) {
-      finish('draw', 'Draw', 'The same position came up three times.');
+      finish(null, 'The same position came up three times.');
     } else if (game.halfmove >= 100) {
-      finish('draw', 'Draw', 'Fifty moves without a capture or pawn move.');
+      finish(null, 'Fifty moves without a capture or pawn move.');
     }
 
     render();
-    animateMove(move, mover, drop);
-    if (!result && game.turn !== playerColor) computerTurn();
+    // An online friend's move can arrive during a review, which has the board just then.
+    if (!reviewing) animateMove(move, mover, drop);
+    if (!result && seat(game.turn) === 'computer') computerTurn();
   }
 
   function playerCanMove() {
-    return !reviewing && !result && game.turn === playerColor && promotionEl.hidden;
+    return !reviewing && !waiting && !result && seat(game.turn) === 'me' && promotionEl.hidden;
   }
 
   function onSquareClick(sq) {
@@ -211,7 +277,7 @@
       if (moves.length === 1) return playMove(moves[0]);
     }
     const piece = game.board[sq];
-    selected = piece && (piece & 8) === playerColor && sq !== selected ? sq : -1;
+    selected = piece && (piece & 8) === game.turn && sq !== selected ? sq : -1;
     render();
   }
 
@@ -221,7 +287,7 @@
       button.type = 'button';
       button.className = 'square';
       button.setAttribute('aria-label', PIECE_NAMES[m.promo]);
-      button.append(pieceEl(playerColor | m.promo));
+      button.append(pieceEl(game.turn | m.promo));
       button.addEventListener('click', () => {
         promotionEl.hidden = true;
         playMove(m, drop);
@@ -305,7 +371,7 @@
     if (sq === -1 || !playerCanMove()) return;
     const piece = game.board[sq];
     // Pressing anything but one of the player's own pieces is a plain click: move there, or deselect.
-    if (!piece || (piece & 8) !== playerColor) return onSquareClick(sq);
+    if (!piece || (piece & 8) !== game.turn) return onSquareClick(sq);
 
     const wasSelected = selected === sq;
     dealing = false;
@@ -361,7 +427,8 @@
 
     const point = onBoard(event);
     const to = event.type === 'pointercancel' ? -1 : squareAt(point.x, point.y);
-    const moves = legal.filter((m) => m.from === sq && m.to === to);
+    // (An online game can be paused while a piece is in the air, if the friend drops out.)
+    const moves = playerCanMove() ? legal.filter((m) => m.from === sq && m.to === to) : [];
     if (!moves.length) {
       // Not a legal square: the piece glides back to where it was picked up and stays selected.
       const home = squareEls[sq];
@@ -476,8 +543,15 @@
 
   function statusText() {
     if (result) return result;
-    if (game.turn !== playerColor) return 'Computer is thinking';
-    return game.inCheck() ? 'You are in check — your move.' : 'Your move.';
+    if (waiting) return waitingText;
+    const who = seat(game.turn), check = game.inCheck();
+    if (who === 'computer') return 'Computer is thinking';
+    if (who === 'friend') return 'Your friend is thinking';
+    if (mode === 'local') {
+      const color = sideName(game.turn);
+      return check ? `${capitalise(color)} is in check — ${color} to move.` : `${capitalise(color)} to move.`;
+    }
+    return check ? 'You are in check — your move.' : 'Your move.';
   }
 
   // Draws a position onto the board and returns its squares, indexed by square number. The live
@@ -535,9 +609,10 @@
       lastMove,
       selected,
       targets: new Set(legal.filter((m) => m.from === selected).map((m) => m.to)),
-      movable: playerCanMove() ? playerColor : -1,
+      movable: playerCanMove() ? game.turn : -1,
     });
-    resignEl.disabled = Boolean(result);
+    mainEl.dataset.mode = mode;
+    resignEl.disabled = Boolean(result) || waiting;
     reviewLastEl.disabled = !lastGame.moves;
 
     const text = statusText();
@@ -545,10 +620,12 @@
       statusEl.textContent = text;
       statusEl.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 300 });
     }
-    statusEl.classList.toggle('thinking', !result && game.turn !== playerColor);
+    statusEl.classList.toggle('thinking', !result && !waiting && seat(game.turn) !== 'me');
 
+    document.getElementById('score-me-label').textContent = MODES[mode].me;
+    document.getElementById('score-them-label').textContent = MODES[mode].them;
     for (const who of Object.keys(scoreEls)) {
-      const el = scoreEls[who], value = String(score[who]);
+      const el = scoreEls[who], value = String(scores[mode][who]);
       if (el.textContent !== value) {
         // Do not animate the numbers filling in when the page first loads.
         if (game.fullmove > 1 || result) pop(el);
@@ -585,17 +662,74 @@
       close() {
         reviewing = false;
         render();
-        if (!result && game.turn !== playerColor) computerTurn();
+        if (!result && seat(game.turn) === 'computer') computerTurn();
       },
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Online games. The connection lives in online.js; these are its ways into the game.
+  // ---------------------------------------------------------------------------
+
+  const onlineHooks = {
+    wait(text) {
+      waiting = true;
+      waitingText = text;
+      selected = -1;
+      promotionEl.hidden = true;
+      render();
+    },
+    begin(color, moves) {
+      waiting = false;
+      newGame(color, moves);
+    },
+    resume() {
+      waiting = false;
+      render();
+    },
+    move(message) {
+      // Ignore anything that is not the friend's next move in this very game.
+      if (waiting || result || seat(game.turn) !== 'friend' || message.ply !== history.length) return;
+      const move = legal.find((m) => sameMove(m, message));
+      if (move) playMove(move);
+    },
+    resign() {
+      if (result || waiting) return;
+      finish(playerColor, resignText(playerColor ^ 8));
+      render();
+    },
+    draw() {
+      if (result || waiting) return;
+      finish(null, 'Draw agreed.');
+      render();
+    },
+    snapshot() {
+      return { moves: history.map(({ from, to, promo }) => ({ from, to, promo })), finished: Boolean(result) };
+    },
+    preferredColor() {
+      return sideEl.value === 'black' ? BLACK : WHITE;
+    },
+  };
+
+  function setMode(value) {
+    if (mode === 'online') Online.close();
+    mode = value;
+    waiting = false;
+    save();
+    newGame();
+    if (mode === 'online') Online.open(onlineHooks);
   }
 
   // ---------------------------------------------------------------------------
   // Controls
   // ---------------------------------------------------------------------------
 
-  document.getElementById('new-game').addEventListener('click', newGame);
-  document.getElementById('play-again').addEventListener('click', newGame);
+  document.getElementById('new-game').addEventListener('click', () => newGame());
+  playAgainEl.addEventListener('click', () => {
+    if (mode !== 'online') return newGame();
+    gameOverEl.hidden = true;
+    Online.rematch();
+  });
   document.getElementById('view-board').addEventListener('click', () => {
     gameOverEl.hidden = true;
   });
@@ -603,25 +737,34 @@
   reviewLastEl.addEventListener('click', startReview);
 
   resignEl.addEventListener('click', () => {
-    if (result) return;
+    if (result || waiting) return;
     promotionEl.hidden = true;
     selected = -1;
-    finish('computer', 'Defeat', 'You resigned — the computer wins.');
+    // On a shared screen it is the side to move that gives up.
+    const loser = mode === 'local' ? game.turn : playerColor;
+    if (mode === 'online') Online.resign();
+    finish(loser ^ 8, resignText(loser));
     render();
   });
 
   document.getElementById('reset-score').addEventListener('click', () => {
-    score.player = score.computer = score.draws = 0;
+    scores[mode] = blankScore();
     save();
     render();
   });
 
-  // Difficulty applies from the computer's next move; switching sides starts a fresh game.
+  // Difficulty applies from the computer's next move. Switching sides starts a fresh game, except
+  // online, where it is the side the next game you create starts you on.
   difficultyEl.addEventListener('change', save);
   sideEl.addEventListener('change', () => {
     save();
-    newGame();
+    if (mode !== 'online') newGame();
   });
+  modeEl.addEventListener('change', () => setMode(modeEl.value));
 
   newGame();
+  if (mode === 'online') {
+    Online.open(onlineHooks);
+    if (joinCode) Online.join(joinCode);
+  }
 })();

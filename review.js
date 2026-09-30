@@ -19,6 +19,12 @@
   };
   const SUMMARY_KINDS = ['best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder'];
   const MARKED_KINDS = ['inaccuracy', 'mistake', 'blunder'];
+  // The column headings for the reviewed player and their opponent, by who the opponent was.
+  const SIDES = {
+    computer: ['You', 'Computer'],
+    online: ['You', 'Friend'],
+    local: ['White', 'Black'],
+  };
 
   const mainEl = document.querySelector('main');
   const panelEl = document.getElementById('review');
@@ -177,7 +183,10 @@
     panelEl.hidden = false;
     evalBarEl.classList.toggle('flipped', review.flip);
     const fullMoves = Math.ceil(moves.length / 2);
-    resultEl.textContent = `${record.result} ${fullMoves} ${fullMoves === 1 ? 'move' : 'moves'} against the ${record.level} computer.`;
+    const opponent = record.opponent || 'computer';
+    const against = { computer: `against the ${record.level} computer`, online: 'against your friend', local: 'on one screen' }[opponent];
+    resultEl.textContent = `${record.result} ${fullMoves} ${fullMoves === 1 ? 'move' : 'moves'} ${against}.`;
+    [review.firstName, review.secondName] = SIDES[opponent];
     buildMoveList();
     show(0);
     refresh();
@@ -360,8 +369,8 @@
       side.accuracy.push(v.accuracy);
     }
     const ordered = [sides[first], sides[1 - first]];
-    document.getElementById('review-first-side').textContent = 'You';
-    document.getElementById('review-second-side').textContent = 'Computer';
+    document.getElementById('review-first-side').textContent = r.firstName;
+    document.getElementById('review-second-side').textContent = r.secondName;
 
     const row = (label, values, className) => {
       const tr = document.createElement('tr');
