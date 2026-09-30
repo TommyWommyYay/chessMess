@@ -1,0 +1,33 @@
+[2026-09-30 10:32:57]
+So each prompt i do can you store it in a text file
+
+[2026-09-30 10:39:47]
+Make me a web based chess game, where i am able to play against a computer. It should have simple design and hold a score for how many games I have won and how many the computer has won. Give the computer 3 difficulties: easy, medium, hard.
+
+[2026-09-30 10:46:55]
+how do i launch it
+
+[2026-09-30 10:58:13]
+i want you to make the UI as fancy as possible. Add animations and change the white background to an animated background design and add animations when you move the pieces, and when someone takes a piece add an explosion
+
+[2026-09-30 11:10:21]
+ i want you to make the UI as fancy as possible. Add animations and change the white background to an animated background design and add animations when you move the pieces, and when someone takes a piece add an explosion
+
+[2026-09-30 11:14:16]
+how do i run this
+
+[2026-09-30 11:16:27]
+can you make the animations smoother as currently they are lagging
+
+[2026-09-30 11:18:42]
+how do i run this
+
+[2026-09-30 11:20:16]
+okay push this code for me to the repo
+
+[2026-09-30 11:23:18]
+how do i actually run it dont do it for me
+
+[2026-09-30 11:24:33]
+make it so you can pick up and drag the chess pieces anywhere on the board
+

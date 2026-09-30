@@ -144,7 +144,8 @@
     }, 900);
   }
 
-  function playMove(move) {
+  // `dropped` means the player dragged the piece onto its square, so it should not slide there again.
+  function playMove(move, dropped) {
     const mover = game.turn;
     dealing = false;
     game.make(move);
@@ -170,7 +171,7 @@
     }
 
     render();
-    animateMove(move, mover);
+    animateMove(move, mover, dropped);
     if (!result && game.turn !== playerColor) computerTurn();
   }
 
@@ -187,7 +188,7 @@
     render();
   }
 
-  function askPromotion(moves) {
+  function askPromotion(moves, dropped) {
     promotionChoicesEl.replaceChildren(...moves.map((m) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -196,12 +197,113 @@
       button.append(pieceEl(playerColor | m.promo));
       button.addEventListener('click', () => {
         promotionEl.hidden = true;
-        playMove(m);
+        playMove(m, dropped);
       });
       return button;
     }));
     promotionEl.hidden = false;
   }
+
+  // ---------------------------------------------------------------------------
+  // Mouse and touch: click a piece and then a square, or pick the piece up and drag it there.
+  // ---------------------------------------------------------------------------
+
+  let drag = null;
+
+  function squareAt(x, y) {
+    const box = boardEl.getBoundingClientRect();
+    const col = Math.floor((x - box.left) / (box.width / 8));
+    const row = Math.floor((y - box.top) / (box.height / 8));
+    if (col < 0 || col > 7 || row < 0 || row > 7) return -1;
+    return playerColor === BLACK ? 63 - (row * 8 + col) : row * 8 + col;
+  }
+
+  // The nearest point to the pointer that keeps a dragged piece on the board, a little in from the
+  // edge so the piece is not cut off.
+  function onBoard(event) {
+    const box = boardEl.getBoundingClientRect();
+    const inset = box.width / 8 * 0.3;
+    return {
+      x: Math.min(Math.max(event.clientX, box.left + inset), box.right - inset),
+      y: Math.min(Math.max(event.clientY, box.top + inset), box.bottom - inset),
+    };
+  }
+
+  boardEl.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || drag) return;
+    const sq = squareAt(event.clientX, event.clientY);
+    if (sq === -1 || result || game.turn !== playerColor || !promotionEl.hidden) return;
+    const piece = game.board[sq];
+    // Pressing anything but one of the player's own pieces is a plain click: move there, or deselect.
+    if (!piece || (piece & 8) !== playerColor) return onSquareClick(sq);
+
+    const wasSelected = selected === sq;
+    dealing = false;
+    selected = sq;
+    render();
+    drag = {
+      sq, wasSelected, startX: event.clientX, startY: event.clientY,
+      piece: squareEls[sq].querySelector('.piece'), lifted: false, over: null,
+    };
+  });
+
+  addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    if (!drag.lifted) {
+      // A few pixels of slack, so that an ordinary click does not count as a drag.
+      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 5) return;
+      drag.lifted = true;
+      squareEls[drag.sq].classList.add('dragging');
+      boardEl.classList.add('grabbing');
+    }
+    const { x, y } = onBoard(event);
+    const home = squareEls[drag.sq].getBoundingClientRect();
+    drag.piece.style.translate = `${x - home.left - home.width / 2}px ${y - home.top - home.height / 2}px`;
+    const over = squareEls[squareAt(x, y)];
+    if (over !== drag.over) {
+      if (drag.over) drag.over.classList.remove('drag-over');
+      if (over) over.classList.add('drag-over');
+      drag.over = over;
+    }
+  });
+
+  function endDrag(event) {
+    if (!drag) return;
+    const { sq, wasSelected, piece, lifted, over } = drag;
+    drag = null;
+    boardEl.classList.remove('grabbing');
+    if (over) over.classList.remove('drag-over');
+    if (!lifted) {
+      // A click without a drag: clicking the piece that was already selected puts it back down.
+      if (wasSelected) {
+        selected = -1;
+        render();
+      }
+      return;
+    }
+
+    const point = onBoard(event);
+    const to = event.type === 'pointercancel' ? -1 : squareAt(point.x, point.y);
+    const moves = legal.filter((m) => m.from === sq && m.to === to);
+    if (!moves.length) {
+      // Not a legal square: the piece glides back to where it was picked up and stays selected.
+      const home = squareEls[sq];
+      piece.animate({ translate: [piece.style.translate, '0px 0px'] }, { duration: 220, easing: 'cubic-bezier(0.25, 0.8, 0.3, 1)' })
+        .onfinish = () => home.classList.remove('dragging');
+      piece.style.translate = '';
+      return;
+    }
+    if (moves.length > 1) {
+      // A promotion: leave the pawn sitting on the last rank while the player chooses a piece.
+      const from = squareEls[sq].getBoundingClientRect(), target = squareEls[to].getBoundingClientRect();
+      piece.style.translate = `${target.left - from.left}px ${target.top - from.top}px`;
+      return askPromotion(moves, true);
+    }
+    playMove(moves[0], true);
+  }
+
+  addEventListener('pointerup', endDrag);
+  addEventListener('pointercancel', endDrag);
 
   // ---------------------------------------------------------------------------
   // Animation
@@ -223,8 +325,13 @@
     piece.animate({ scale: [1, 1.25, 1] }, { duration: MOVE_MS, easing: 'ease-in-out' });
   }
 
-  function animateMove(move, mover) {
-    slide(move.from, move.to);
+  function animateMove(move, mover, dropped) {
+    if (dropped) {
+      // The piece is already there; just let it settle from its lifted size.
+      squareEls[move.to].querySelector('.piece').animate({ scale: [1.25, 1] }, { duration: 180, easing: 'ease-out' });
+    } else {
+      slide(move.from, move.to);
+    }
     if (move.flags & F_CASTLE) {
       // The rook jumps over the king: from the corner to the square next to it.
       if (move.to > move.from) slide(move.to + 1, move.to - 1);
@@ -253,7 +360,7 @@
         { transform: 'translate(3px, 3px)' },
         { transform: 'translate(0, 0)' },
       ], { duration: 380, easing: 'ease-out' });
-    }, MOVE_MS * 0.6);
+    }, dropped ? 0 : MOVE_MS * 0.6);
   }
 
   function pop(el) {
@@ -322,7 +429,11 @@
       if (i % 8 === 0) el.append(coordEl('rank', 8 - row));
       if (i >= 56) el.append(coordEl('file', 'abcdefgh'[col]));
 
-      el.addEventListener('click', () => onSquareClick(sq));
+      // Mouse and touch are handled by the pointer events on the board; this is for the keyboard,
+      // whose clicks have a detail of 0.
+      el.addEventListener('click', (event) => {
+        if (event.detail === 0) onSquareClick(sq);
+      });
       ordered.push(el);
       squareEls[sq] = el;
     }

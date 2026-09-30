@@ -282,6 +282,8 @@ h1 {
   overflow: hidden;
   border-radius: 10px;
   transition: filter 1.2s ease;
+  /* Dragging a piece with a finger must not scroll the page. */
+  touch-action: none;
 }
 
 .board-wrap.lost .board {
@@ -364,6 +366,33 @@ h1 {
 
 .square.target:hover {
   box-shadow: inset 0 0 0 100px rgba(34, 211, 238, 0.35);
+}
+
+/* A piece that has been picked up: bigger, above every other square, and following the pointer. */
+.square.mine {
+  cursor: grab;
+}
+
+.board.grabbing .square {
+  cursor: grabbing;
+}
+
+.square.dragging {
+  z-index: 5;
+}
+
+.board.grabbing .square.dragging .piece,
+.square.dragging .piece {
+  scale: 1.25;
+  filter: drop-shadow(0 10px 6px rgba(0, 0, 0, 0.4));
+  animation: none;
+  transition: none;
+  transform: none;
+  will-change: translate;
+}
+
+.square.drag-over {
+  box-shadow: inset 0 0 0 4px rgba(255, 255, 255, 0.9);
 }
 
 .piece {
