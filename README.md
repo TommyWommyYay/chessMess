@@ -5,7 +5,7 @@ A browser chess game against the computer.
 Open `index.html` in a browser to play — there is nothing to install or build.
 
 - Three opponents:
-  - **Computer**: pick its rating with the slider, from 400 (beginner) to 2400 (master). Lower ratings look less far ahead and make human-like mistakes; higher ones think longer. The numbers are rough labels, not measured ratings. Your own rating (starting at 1200) goes up and down after every game against the computer, Elo-style.
+  - **Computer**: pick its rating with the slider, from 400 (beginner) to 2400 (master). Lower ratings look less far ahead and make human-like mistakes; higher ones think longer. The numbers are rough labels, not measured ratings. The slider's last stop, **2850 · Magnus Carlsen**, hands the game to [Stockfish](https://stockfishchess.org) at full strength (loaded from the internet the first time you pick it; if it can't load, you get our engine at 2400 instead). Your own rating (starting at 1200) goes up and down after every game against the computer, Elo-style.
   - **Friend, same screen**: take turns on one computer.
   - **Friend, online**: choose *Create game* and send your friend the link. The game starts when they open it. Moves travel through a free public message relay (an MQTT broker: [EMQX](https://www.emqx.com/en/mqtt/public-mqtt5-broker)'s, or [HiveMQ](https://www.hivemq.com/mqtt/public-mqtt-broker/)'s if that is down), so this needs an internet connection but no server or account of our own, and works on networks that block direct browser-to-browser connections. The relay is public, so don't send anything secret through it; the random game code keeps other people's games from mixing with yours. If your friend refreshes or drops out, they can rejoin with the same link and carry on. There's also a draw offer, a rematch button (you swap colors each rematch), and a chat with quick emotes that float across the board.
 - Player names: set yours (or white's and black's, on a shared screen) and they show in the score, the status line, the chat and the review.
@@ -24,6 +24,7 @@ Open `index.html` in a browser to play — there is nothing to install or build.
 - `index.html`, `style.css` — the page.
 - `engine.js` — chess rules, the computer opponent and the move analysis used by the review.
 - `app.js` — the board, clicking and dragging, move animations and score.
+- `magnus.js` — the Magnus level (Stockfish in a background worker).
 - `review.js` — the game review.
 - `online.js` — online games: connecting, invites, draw offers and rematches.
 

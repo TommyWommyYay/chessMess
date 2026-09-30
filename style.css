@@ -710,7 +710,7 @@ main[data-mode="online"] #new-game {
 }
 
 .rating-readout {
-  flex: 0 0 9.5em;
+  flex: 0 1 12em;
 }
 
 .rating-readout strong {
@@ -719,6 +719,17 @@ main[data-mode="online"] #new-game {
   font-variant-numeric: tabular-nums;
   color: #67e8f9;
   text-shadow: 0 0 14px rgba(34, 211, 238, 0.55);
+}
+
+/* The Magnus level gets a gold readout. */
+.rating-row.magnus .rating-readout strong {
+  color: var(--gold);
+  text-shadow: 0 0 16px rgba(251, 191, 36, 0.8);
+}
+
+.rating-row.magnus .rating-slider input::-webkit-slider-thumb {
+  background: var(--gold);
+  box-shadow: 0 0 14px rgba(251, 191, 36, 0.9);
 }
 
 .my-rating {

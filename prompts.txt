@@ -98,3 +98,12 @@ yes so add a rating system for the computers with a slider toggle. add chat and 
 [2026-09-30 14:03:23]
 yes
 
+[2026-09-30 14:06:45]
+add a magnus carlsen difficulty level to the computer difficulty
+
+[2026-09-30 14:10:44]
+have you pushed these edits
+
+[2026-09-30 14:11:00]
+yes
+

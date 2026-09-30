@@ -185,7 +185,8 @@
     const fullMoves = Math.ceil(moves.length / 2);
     const opponent = record.opponent || 'computer';
     // Older games saved the computer's level as easy/medium/hard rather than a rating.
-    const computer = typeof record.level === 'number' ? `the ${record.level}-rated computer` : `the ${record.level} computer`;
+    const computer = record.level >= 2850 ? 'Magnus-level Stockfish'
+      : typeof record.level === 'number' ? `the ${record.level}-rated computer` : `the ${record.level} computer`;
     const friendName = record.names && record.names[1] !== 'Friend' ? record.names[1] : 'your friend';
     const against = { computer: `against ${computer}`, online: `against ${friendName}`, local: 'on one screen' }[opponent];
     resultEl.textContent = `${record.result} ${fullMoves} ${fullMoves === 1 ? 'move' : 'moves'} ${against}.`;

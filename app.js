@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const { Game, chooseMove, sameMove, squareName, WHITE, BLACK, F_EP, F_CASTLE, MIN_RATING, MAX_RATING } = Chess;
+  const { Game, chooseMove, sameMove, moveToUci, squareName, WHITE, BLACK, F_EP, F_CASTLE, MIN_RATING, MAX_RATING } = Chess;
 
   // Solid glyphs for both sides (coloured in CSS); U+FE0E stops the pawn rendering as an emoji.
   const GLYPHS = ['', '♟', '♞', '♝', '♜', '♛', '♚'].map((g) => g && g + '︎');
@@ -13,7 +13,13 @@
   const START_RATING = 1200;
   const RATING_K = 32;      // how far one game can move your rating (the usual Elo K-factor)
   // What the computer's rating slider means, from the bottom up.
-  const RATING_NAMES = [[400, 'Beginner'], [800, 'Casual'], [1200, 'Club player'], [1600, 'Strong'], [2000, 'Expert'], [2300, 'Master']];
+  const RATING_NAMES = [[400, 'Beginner'], [800, 'Casual'], [1200, 'Club player'], [1600, 'Strong'], [2000, 'Expert'], [2300, 'Master'],
+    [2850, 'Magnus Carlsen']];
+  // The slider's last stop, one step past our own engine's top rating, is the Magnus level:
+  // Stockfish at full strength (see magnus.js), rated like Magnus himself.
+  const MAGNUS_RATING = 2850;
+  const MAGNUS_STOP = MAX_RATING + 100;
+  const MAGNUS_THINK_MS = 2000;
 
   const boardEl = document.getElementById('board');
   const boardWrapEl = document.getElementById('board-wrap');
@@ -52,7 +58,8 @@
   modeEl.value = joinCode ? 'online' : MODES.includes(saved.mode) ? saved.mode : 'computer';
   // (Before the slider there were three difficulties.)
   const OLD_LEVELS = { easy: 600, medium: 1200, hard: 2000 };
-  ratingEl.value = clampRating(saved.rating ?? OLD_LEVELS[saved.difficulty] ?? START_RATING);
+  ratingEl.max = MAGNUS_STOP;
+  setSlider(clampRating(saved.rating ?? OLD_LEVELS[saved.difficulty] ?? START_RATING));
   sideEl.value = saved.side === 'black' ? 'black' : 'white';
   const names = { me: '', white: '', black: '', ...saved.names };
   for (const key of Object.keys(nameEls)) nameEls[key].value = names[key] = cleanName(names[key]);
@@ -67,7 +74,8 @@
   let reviewing = false;    // true while a finished game is being reviewed instead of played
   let waiting = false;      // an online game that has not started, or whose friend has dropped out
   let waitingText = '';
-  let gameRating = Number(ratingEl.value);   // the computer's rating for the game being played
+  let gameRating = sliderRating();   // the computer's rating for the game being played
+  let magnusFailed = false; // Stockfish could not be loaded, so the Magnus level falls back to 2400
   let friendName = '';      // the online friend's name, once they have sent it
   let turnToken = 0;        // bumped to cancel a computer move that is still being worked out
   let gameOverTimer = null;
@@ -90,11 +98,20 @@
   }
 
   function save() {
-    store(STORAGE_KEY, { scores, mode, rating: Number(ratingEl.value), myRating, names, side: sideEl.value });
+    store(STORAGE_KEY, { scores, mode, rating: sliderRating(), myRating, names, side: sideEl.value });
   }
 
   function clampRating(value) {
+    if (Number(value) >= MAGNUS_RATING) return MAGNUS_RATING;
     return Math.min(MAX_RATING, Math.max(MIN_RATING, Math.round(Number(value) / 100) * 100 || START_RATING));
+  }
+
+  function sliderRating() {
+    return Number(ratingEl.value) >= MAGNUS_STOP ? MAGNUS_RATING : Number(ratingEl.value);
+  }
+
+  function setSlider(rating) {
+    ratingEl.value = rating >= MAGNUS_RATING ? MAGNUS_STOP : rating;
   }
 
   function cleanName(text) {
@@ -108,7 +125,7 @@
   // The two score columns, and the review's: this screen's player (or white) first.
   function columnNames() {
     if (mode === 'local') return [names.white || 'White', names.black || 'Black'];
-    if (mode === 'computer') return [names.me || 'You', `Computer (${gameRating})`];
+    if (mode === 'computer') return [names.me || 'You', gameRating === MAGNUS_RATING ? 'Magnus (2850)' : `Computer (${gameRating})`];
     return [names.me || 'You', friendName || 'Friend'];
   }
 
@@ -155,7 +172,11 @@
   }
 
   function think() {
-    const rating = gameRating;
+    if (gameRating === MAGNUS_RATING && !magnusFailed) return thinkLikeMagnus();
+    return thinkOurselves(Math.min(gameRating, MAX_RATING));
+  }
+
+  function thinkOurselves(rating) {
     return new Promise((resolve) => {
       if (!worker) {
         const current = game, seen = positions;
@@ -165,6 +186,22 @@
       pending = { id: ++requestId, resolve, game, rating, seen: positions };
       worker.postMessage({ id: pending.id, state: game.snapshot(), rating, seen: [...positions] });
     });
+  }
+
+  function thinkLikeMagnus() {
+    const current = game, moves = history.map(moveToUci);
+    return Magnus.bestMove(moves, MAGNUS_THINK_MS).then(
+      (uci) => {
+        if (current !== game) return null;
+        return legal.find((m) => moveToUci(m) === uci) || thinkOurselves(MAX_RATING);
+      },
+      () => {
+        // Stockfish is fetched from the internet; without it, play our own engine's best.
+        magnusFailed = true;
+        render();
+        return current === game ? thinkOurselves(MAX_RATING) : null;
+      },
+    );
   }
 
   function computerTurn() {
@@ -189,7 +226,7 @@
     FX.stop();
     game = new Game();
     playerColor = mode === 'local' ? WHITE : color ?? (sideEl.value === 'black' ? BLACK : WHITE);
-    gameRating = Number(ratingEl.value);
+    gameRating = sliderRating();
     selected = -1;
     lastMove = null;
     result = null;
@@ -683,14 +720,17 @@
   }
 
   function renderRating() {
-    const chosen = Number(ratingEl.value);
+    const chosen = sliderRating();
     document.getElementById('rating-value').textContent = chosen;
     // A new rating for the computer takes over from the next game, unless this one has not begun.
     const later = chosen !== gameRating;
-    document.getElementById('rating-name').textContent = ratingName(chosen) + (later ? ' · from your next game' : '');
+    let note = later ? ' · from your next game' : '';
+    if (chosen === MAGNUS_RATING) note += magnusFailed ? ' · Stockfish did not load (offline?), so playing at 2400' : ' · Stockfish at full strength';
+    document.getElementById('rating-name').textContent = ratingName(chosen) + note;
     document.getElementById('my-rating').textContent = myRating;
     // The filled part of the slider track.
-    ratingEl.style.setProperty('--fill', ((chosen - MIN_RATING) / (MAX_RATING - MIN_RATING) * 100) + '%');
+    ratingEl.style.setProperty('--fill', ((ratingEl.value - MIN_RATING) / (MAGNUS_STOP - MIN_RATING) * 100) + '%');
+    document.getElementById('rating-field').classList.toggle('magnus', chosen === MAGNUS_RATING);
   }
 
   // ---------------------------------------------------------------------------
@@ -822,7 +862,8 @@
 
   ratingEl.addEventListener('input', () => {
     // Before the first move it can still change who you are playing.
-    if (mode === 'computer' && !history.length && !result) gameRating = Number(ratingEl.value);
+    if (mode === 'computer' && !history.length && !result) gameRating = sliderRating();
+    magnusFailed = false;
     save();
     render();
   });

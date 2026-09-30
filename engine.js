@@ -585,6 +585,11 @@
       return { best: { from, to, promo }, bestScore: top.score, playedScore, options: moves.length };
     }
 
+    // UCI notation (e2e4, e7e8q), which other chess engines understand.
+    function moveToUci(m) {
+      return squareName(m.from) + squareName(m.to) + (m.promo ? ' pnbrq'[m.promo] : '');
+    }
+
     // Standard algebraic notation (Nf3, exd5, O-O, e8=Q+) for a legal move in position g.
     function moveToSan(g, m, legal = g.legalMoves()) {
       const type = m.piece & 7;
@@ -613,7 +618,7 @@
     }
 
     return {
-      Game, chooseMove, analyse, moveToSan, sameMove, evaluate, squareName, squareIndex, START_FEN, MATE,
+      Game, chooseMove, analyse, moveToSan, moveToUci, sameMove, evaluate, squareName, squareIndex, START_FEN, MATE,
       MIN_RATING, MAX_RATING,
       WHITE, BLACK, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, F_EP, F_CASTLE,
     };
