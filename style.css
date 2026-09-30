@@ -1,0 +1,604 @@
+:root {
+  color-scheme: dark;
+  --board-size: min(calc(100vw - 72px), 62vh, 560px);
+  --square: calc(var(--board-size) / 8);
+  --text: #f3f1ff;
+  --muted: #aaa5d1;
+  --violet: #8b5cf6;
+  --cyan: #22d3ee;
+  --pink: #f472b6;
+  --gold: #fbbf24;
+  --glass: rgba(255, 255, 255, 0.07);
+  --glass-line: rgba(255, 255, 255, 0.16);
+  --symbols: "Segoe UI Symbol", "Noto Sans Symbols 2", "Apple Symbols", "DejaVu Sans", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #07061a;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  margin: 0;
+  padding: 12px;
+  overflow-x: hidden;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text);
+}
+
+/* ---------- Animated backdrop ---------- */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 0%, #211852 0%, #0e0b29 55%, #07061a 100%);
+}
+
+.aurora {
+  position: absolute;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.aurora.a {
+  top: -25vmax;
+  left: -15vmax;
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.6), transparent 68%);
+  animation: drift-a 21s ease-in-out infinite alternate;
+}
+
+.aurora.b {
+  right: -20vmax;
+  bottom: -30vmax;
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.5), transparent 68%);
+  animation: drift-b 27s ease-in-out infinite alternate;
+}
+
+.aurora.c {
+  top: 30%;
+  left: 40%;
+  width: 42vmax;
+  height: 42vmax;
+  background: radial-gradient(circle, rgba(219, 39, 119, 0.38), transparent 68%);
+  animation: drift-c 33s ease-in-out infinite alternate;
+}
+
+@keyframes drift-a {
+  to { transform: translate(32vw, 28vh) scale(1.3); }
+}
+
+@keyframes drift-b {
+  to { transform: translate(-36vw, -30vh) scale(0.8); }
+}
+
+@keyframes drift-c {
+  to { transform: translate(-40vw, -22vh) scale(1.4); }
+}
+
+#bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.floater {
+  position: absolute;
+  bottom: -20vh;
+  left: var(--x);
+  font-family: var(--symbols);
+  font-size: var(--size);
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.07);
+  will-change: transform;
+  animation: float-up var(--duration) linear var(--delay) infinite;
+}
+
+@keyframes float-up {
+  to { transform: translateY(-145vh) rotate(var(--spin)); }
+}
+
+#fx {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ---------- Panel ---------- */
+
+main {
+  width: calc(var(--board-size) + 48px);
+  padding: 20px 24px 24px;
+  border: 1px solid var(--glass-line);
+  border-radius: 24px;
+  background: rgba(18, 15, 46, 0.8);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  animation: rise 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(40px) scale(0.96); }
+}
+
+h1 {
+  margin: 0 0 14px;
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+  color: transparent;
+  background: linear-gradient(90deg, #a78bfa, var(--cyan), var(--pink), var(--gold), #a78bfa);
+  background-size: 300% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: shimmer 9s linear infinite;
+}
+
+@keyframes shimmer {
+  to { background-position: 300% 0; }
+}
+
+.logo {
+  display: inline-block;
+  font-family: var(--symbols);
+  color: #c4b5fd;
+  text-shadow: 0 0 18px rgba(139, 92, 246, 0.9);
+  animation: hop 2.6s ease-in-out infinite;
+}
+
+@keyframes hop {
+  0%, 60%, 100% { transform: translateY(0) rotate(0); }
+  75% { transform: translateY(-7px) rotate(-12deg); }
+  88% { transform: translateY(0) rotate(4deg); }
+}
+
+.score {
+  display: flex;
+  gap: 10px;
+  text-align: center;
+}
+
+.score > div {
+  flex: 1;
+  padding: 8px 0 9px;
+  border: 1px solid var(--glass-line);
+  border-radius: 14px;
+  background: var(--glass);
+}
+
+.score-value {
+  display: block;
+  font-size: 1.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+#score-player {
+  color: #67e8f9;
+  text-shadow: 0 0 16px rgba(34, 211, 238, 0.6);
+}
+
+#score-computer {
+  color: #f9a8d4;
+  text-shadow: 0 0 16px rgba(244, 114, 182, 0.6);
+}
+
+.score-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.status {
+  min-height: 1.5em;
+  margin: 14px 0;
+  text-align: center;
+  font-weight: 500;
+}
+
+.status.thinking::after {
+  content: "";
+  animation: dots 1.2s steps(1) infinite;
+}
+
+@keyframes dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+}
+
+/* ---------- Board ---------- */
+
+.board-wrap {
+  position: relative;
+  width: var(--board-size);
+  height: var(--board-size);
+}
+
+/* The glow behind the board. It is blurred once and then only fades in and out, which is cheap. */
+.board-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 14px;
+  background: conic-gradient(var(--violet), var(--cyan), var(--pink), var(--gold), var(--violet));
+  filter: blur(20px);
+  will-change: opacity;
+  animation: glow 3.5s ease-in-out infinite alternate;
+}
+
+@keyframes glow {
+  from { opacity: 0.4; }
+  to { opacity: 0.8; }
+}
+
+/* The rainbow border: an oversized gradient spinning behind the board, clipped to a thin frame. */
+.board-border {
+  position: absolute;
+  inset: -4px;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+.board-border::before {
+  content: "";
+  position: absolute;
+  top: -25%;
+  left: -25%;
+  width: 150%;
+  height: 150%;
+  background: conic-gradient(var(--violet), var(--cyan), var(--pink), var(--gold), var(--violet));
+  will-change: transform;
+  animation: spin 7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.board {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  transition: filter 1.2s ease;
+}
+
+.board-wrap.lost .board {
+  filter: grayscale(0.85) brightness(0.75);
+}
+
+.square {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  font-family: var(--symbols);
+  font-size: calc(var(--square) * 0.76);
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.square.light {
+  background: linear-gradient(135deg, #f1f3fd, #d4dbf3);
+}
+
+.square.dark {
+  background: linear-gradient(135deg, #7783cc, #59629f);
+}
+
+/* The square a piece is sliding into sits above its neighbours so the piece is not hidden. */
+.square.moving {
+  z-index: 3;
+}
+
+.square.last-move {
+  box-shadow: inset 0 0 0 100px rgba(250, 204, 21, 0.42);
+}
+
+.square.selected {
+  box-shadow: inset 0 0 0 100px rgba(34, 211, 238, 0.5), inset 0 0 0 3px rgba(255, 255, 255, 0.8);
+}
+
+.square.check {
+  animation: alarm 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes alarm {
+  from { box-shadow: inset 0 0 0 100px rgba(239, 68, 68, 0.35); }
+  to { box-shadow: inset 0 0 0 100px rgba(239, 68, 68, 0.85), inset 0 0 18px 6px rgba(255, 255, 255, 0.5); }
+}
+
+.square:focus-visible {
+  z-index: 2;
+  outline: 3px solid #fff;
+  outline-offset: -3px;
+}
+
+/* Marks the squares the selected piece can move to: a dot, or a ring around a piece it can take. */
+.square.target::after {
+  content: "";
+  position: absolute;
+  width: 28%;
+  height: 28%;
+  border-radius: 50%;
+  background: rgba(16, 12, 48, 0.4);
+  animation: pulse 1.1s ease-in-out infinite alternate;
+}
+
+.square.target.occupied::after {
+  width: 86%;
+  height: 86%;
+  border: calc(var(--square) * 0.08) solid rgba(239, 68, 68, 0.75);
+  background: none;
+}
+
+@keyframes pulse {
+  from { transform: scale(0.8); opacity: 0.6; }
+  to { transform: scale(1.1); opacity: 1; }
+}
+
+.square.target:hover {
+  box-shadow: inset 0 0 0 100px rgba(34, 211, 238, 0.35);
+}
+
+.piece {
+  position: relative;
+  z-index: 1;
+  transition: transform 0.15s ease;
+}
+
+.piece.white {
+  color: #fff;
+  text-shadow: 0 0 2px #120e33, 0 0 2px #120e33, 0 3px 4px rgba(0, 0, 0, 0.45);
+}
+
+.piece.black {
+  color: #15122e;
+  text-shadow: 0 0 2px rgba(255, 255, 255, 0.55), 0 3px 4px rgba(0, 0, 0, 0.35);
+}
+
+.square.mine:hover .piece {
+  transform: translateY(-7%) scale(1.12);
+}
+
+.square.selected .piece {
+  animation: bob 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes bob {
+  from { transform: translateY(-3%) scale(1.1); }
+  to { transform: translateY(-11%) scale(1.16); }
+}
+
+/* New game: the pieces drop onto the board one after another. */
+.board.dealing .piece {
+  animation: deal 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  animation-delay: calc(var(--i) * 8ms);
+}
+
+@keyframes deal {
+  from { opacity: 0; transform: translateY(-70%) scale(0.3) rotate(-25deg); }
+}
+
+/* The captured piece, left in place until the attacker lands on it. */
+.piece.ghost {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.coord {
+  position: absolute;
+  font-family: system-ui, sans-serif;
+  font-size: calc(var(--square) * 0.17);
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.coord.rank {
+  top: 3px;
+  left: 3px;
+}
+
+.coord.file {
+  right: 3px;
+  bottom: 3px;
+}
+
+.square.light .coord {
+  color: #6a74b8;
+}
+
+.square.dark .coord {
+  color: #dfe4f8;
+}
+
+/* ---------- Overlays on the board (promotion, game over) ---------- */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(8, 6, 28, 0.72);
+  animation: fade-in 0.3s ease both;
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+.overlay-card {
+  max-width: 88%;
+  padding: 18px 22px;
+  border: 1px solid var(--glass-line);
+  border-radius: 18px;
+  background: rgba(24, 20, 60, 0.9);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 40px rgba(139, 92, 246, 0.35);
+  text-align: center;
+  animation: pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.6) translateY(20px); }
+}
+
+.overlay-card h2 {
+  margin: 0 0 4px;
+  font-size: 1.6rem;
+}
+
+.overlay-card p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+#game-over.win h2 {
+  color: #67e8f9;
+  text-shadow: 0 0 24px rgba(34, 211, 238, 0.8);
+}
+
+#game-over.loss h2 {
+  color: #f9a8d4;
+  text-shadow: 0 0 24px rgba(244, 114, 182, 0.8);
+}
+
+.overlay-actions,
+.promotion-choices {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.promotion-choices .square {
+  width: var(--square);
+  height: var(--square);
+  border-radius: 10px;
+  background: linear-gradient(135deg, #7783cc, #59629f);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.promotion-choices .square:hover {
+  transform: translateY(-4px) scale(1.06);
+  box-shadow: 0 8px 22px rgba(34, 211, 238, 0.5);
+}
+
+/* ---------- Controls ---------- */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+select,
+button {
+  font: inherit;
+  color: var(--text);
+}
+
+.controls select,
+.controls button,
+.overlay-actions button {
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: var(--glass);
+  font-size: 0.95rem;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+select option {
+  background: #1a1640;
+  color: var(--text);
+}
+
+.controls select:hover,
+.controls button:hover:not(:disabled),
+.overlay-actions button:hover {
+  transform: translateY(-2px);
+  border-color: var(--violet);
+  box-shadow: 0 8px 22px rgba(139, 92, 246, 0.45);
+}
+
+.controls button:active:not(:disabled),
+.overlay-actions button:active {
+  transform: translateY(0) scale(0.96);
+}
+
+button.primary {
+  border-color: transparent;
+  background: linear-gradient(120deg, var(--violet), var(--cyan));
+  font-weight: 600;
+}
+
+.controls button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.controls button.quiet {
+  margin-left: auto;
+  padding: 0 4px;
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+.controls button.quiet:hover {
+  box-shadow: none;
+  color: var(--text);
+}
