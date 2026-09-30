@@ -33,6 +33,8 @@
     black: document.getElementById('black-name'),
   };
   const resignEl = document.getElementById('resign');
+  const undoEl = document.getElementById('undo');
+  const redoEl = document.getElementById('redo');
   const reviewLastEl = document.getElementById('review-last');
   const playAgainEl = document.getElementById('play-again');
   const scoreEls = {
@@ -65,6 +67,7 @@
 
   let mode = modeEl.value;  // 'computer', 'local' (two players on this screen) or 'online'
   let game, playerColor, legal, selected, lastMove, positions, history, result;
+  let redoStack = [];       // moves taken back with Undo, the next one to redo last
   let lastGame = load(LAST_GAME_KEY);
   let squareEls = [];
   let flipped = false;      // the board is drawn from black's side
@@ -200,10 +203,14 @@
 
   function computerTurn() {
     const token = ++turnToken;
+    // A reply that was taken back with Undo comes back as it was, instead of being thought out again.
+    const redoing = redoStack.length > 0;
     // Wait at least long enough for the player's move (or the opening deal) to finish animating.
-    const pause = new Promise((resolve) => setTimeout(resolve, lastMove ? 700 : 1300));
-    Promise.all([think(), pause]).then(([move]) => {
-      if (token === turnToken && !result && move) playMove(move);
+    const pause = new Promise((resolve) => setTimeout(resolve, redoing ? 450 : lastMove ? 700 : 1300));
+    Promise.all([redoing ? null : think(), pause]).then(([move]) => {
+      if (token !== turnToken || result) return;
+      if (redoing) playMove(redoStack.pop(), undefined, true);
+      else if (move) playMove(move);
     });
   }
 
@@ -226,6 +233,7 @@
     lastMove = null;
     result = null;
     history = [];
+    redoStack = [];
     positions = new Map([[game.key(), 1]]);
     for (const saved of moves) {
       const move = game.legalMoves().find((m) => sameMove(m, saved));
@@ -317,10 +325,12 @@
   }
 
   // `drop` is set when the player dragged the piece onto its square, so it should not slide there
-  // again; it holds how far the piece was swinging when it was let go.
-  function playMove(move, drop) {
+  // again; it holds how far the piece was swinging when it was let go. `redoing` is set when the
+  // move is one that was taken back with Undo; any other move forgets the moves that could be redone.
+  function playMove(move, drop, redoing = false) {
     const mover = game.turn;
     dealing = false;
+    if (!redoing) redoStack = [];
     const key = record(move);
     selected = -1;
     legal = game.legalMoves();
@@ -341,6 +351,66 @@
     // An online friend's move can arrive during a review, which has the board just then.
     if (!reviewing) animateMove(move, mover, drop);
     if (!result && seat(game.turn) === 'computer') computerTurn();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Undo and redo, for games against the computer and on a shared screen. Against the computer,
+  // Undo takes back your last move along with the computer's reply to it (or stops the computer
+  // thinking about one), so it is your move again.
+  // ---------------------------------------------------------------------------
+
+  function colorOfPly(ply) {
+    return ply % 2 ? BLACK : WHITE;
+  }
+
+  function canUndo() {
+    return mode !== 'online' && !reviewing && !result && history.some((_, ply) => seat(colorOfPly(ply)) === 'me');
+  }
+
+  function canRedo() {
+    return mode !== 'online' && !reviewing && !result && redoStack.length > 0 && seat(game.turn) === 'me';
+  }
+
+  // Sets the game up afresh with `moves` played.
+  function replay(moves) {
+    game = new Game();
+    history = [];
+    lastMove = null;
+    positions = new Map([[game.key(), 1]]);
+    for (const move of moves) record(move);
+    legal = game.legalMoves();
+    selected = -1;
+  }
+
+  function undo() {
+    if (!canUndo()) return;
+    turnToken++;   // the computer stops thinking about its reply
+    const undone = [];
+    while (history.length) {
+      undone.push(history.pop());
+      if (seat(colorOfPly(history.length)) === 'me') break;
+    }
+    redoStack.push(...undone);
+    replay(history);
+    dealing = false;
+    promotionEl.hidden = true;
+    render();
+    // The pieces slide back where they came from, and anything they took reappears.
+    for (const move of undone) {
+      slide(move.to, move.from);
+      slideRook(move, true);
+      if (!move.captured) continue;
+      const captureSq = move.flags & F_EP ? move.to + ((move.piece & 8) === WHITE ? 8 : -8) : move.to;
+      const piece = squareEls[captureSq].querySelector('.piece');
+      if (piece) piece.animate({ opacity: [0, 1], scale: [0.4, 1] }, { duration: MOVE_MS, easing: 'ease-out' });
+    }
+  }
+
+  // Plays the next move taken back with Undo; against the computer, its reply follows by itself.
+  function redo() {
+    if (!canRedo()) return;
+    promotionEl.hidden = true;
+    playMove(redoStack.pop(), undefined, true);
   }
 
   function playerCanMove() {
@@ -551,11 +621,13 @@
     piece.animate({ scale: [1, 1.25, 1] }, { duration: MOVE_MS, easing: 'ease-in-out' });
   }
 
-  // When castling, the rook jumps over the king: from the corner to the square next to it.
-  function slideRook(move) {
+  // When castling, the rook jumps over the king: from the corner to the square next to it
+  // (or, when the castling is undone, back to the corner).
+  function slideRook(move, back = false) {
     if (!(move.flags & F_CASTLE)) return;
-    if (move.to > move.from) slide(move.to + 1, move.to - 1);
-    else slide(move.to - 2, move.to + 1);
+    const [corner, beside] = move.to > move.from ? [move.to + 1, move.to - 1] : [move.to - 2, move.to + 1];
+    if (back) slide(beside, corner);
+    else slide(corner, beside);
   }
 
   function animateMove(move, mover, drop) {
@@ -692,6 +764,8 @@
     });
     mainEl.dataset.mode = mode;
     resignEl.disabled = Boolean(result) || waiting;
+    undoEl.disabled = !canUndo();
+    redoEl.disabled = !canRedo();
     reviewLastEl.disabled = !lastGame.moves;
 
     const text = statusText();
@@ -874,6 +948,8 @@
   // ---------------------------------------------------------------------------
 
   document.getElementById('new-game').addEventListener('click', () => newGame());
+  undoEl.addEventListener('click', undo);
+  redoEl.addEventListener('click', redo);
   playAgainEl.addEventListener('click', () => {
     if (mode !== 'online') return newGame();
     gameOverEl.hidden = true;

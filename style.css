@@ -646,7 +646,9 @@ main[data-mode="local"] #side-field,
 main[data-mode="local"] #name-field,
 main:not([data-mode="local"]) #white-name-field,
 main:not([data-mode="local"]) #black-name-field,
-main[data-mode="online"] #new-game {
+main[data-mode="online"] #new-game,
+main[data-mode="online"] #undo,
+main[data-mode="online"] #redo {
   display: none;
 }
 
