@@ -7,7 +7,7 @@ Open `index.html` in a browser to play — there is nothing to install or build.
 - Three opponents:
   - **Computer**, on easy, medium or hard.
   - **Friend, same screen**: take turns on one computer.
-  - **Friend, online**: choose *Create game* and send your friend the link. The game starts when they open it. Moves are sent directly between your two browsers (WebRTC via [PeerJS](https://peerjs.com)), so this needs an internet connection but no server of our own. If your friend refreshes or drops out, they can rejoin with the same link and carry on. There's also a draw offer and a rematch button (you swap colors each rematch).
+  - **Friend, online**: choose *Create game* and send your friend the link. The game starts when they open it. Moves travel through a free public message relay (an MQTT broker: [EMQX](https://www.emqx.com/en/mqtt/public-mqtt5-broker)'s, or [HiveMQ](https://www.hivemq.com/mqtt/public-mqtt-broker/)'s if that is down), so this needs an internet connection but no server or account of our own, and works on networks that block direct browser-to-browser connections. The relay is public, so don't send anything secret through it; the random game code keeps other people's games from mixing with yours. If your friend refreshes or drops out, they can rejoin with the same link and carry on. There's also a draw offer and a rematch button (you swap colors each rematch).
 - Play as white or black. Click a piece and then a square, or pick the piece up and drag it (it dangles from your pointer).
 - A separate score for each kind of opponent is kept in the browser between visits.
 - **Game review**: after a game, choose *Review game* (or *Review last game* later on). The engine goes through every move and shows:

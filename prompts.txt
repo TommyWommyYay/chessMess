@@ -68,3 +68,12 @@ okay please do that
 [2026-09-30 12:27:02]
 so do i merge this to main
 
+[2026-09-30 12:30:18]
+explain what to do in github pages
+
+[2026-09-30 12:30:49]
+how do i run the game
+
+[2026-09-30 12:35:06]
+my frend entered the link and it was stuck at infinitely loading
+

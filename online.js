@@ -1,19 +1,25 @@
-// Online games against a friend. The two browsers talk to each other directly over WebRTC; PeerJS
-// and its free public server are only used for them to find each other, so there is no server of
-// our own. One player creates a game and sends the link (or just the code); the other opens it.
-// The creator (the host) decides who plays which color, and each side checks every move it
-// receives against its own copy of the rules.
+// Online games against a friend. Both browsers connect out to a free public MQTT broker (a message
+// relay) over a secure WebSocket and exchange messages through it, so there is no server of our own
+// and no direct connection between the two players is needed: that is what lets it work on home
+// routers and mobile networks that block browser-to-browser connections.
+// One player creates a game and sends the link (or just the code); the other opens it. The creator
+// (the host) decides who plays which color, and each side checks every move it receives against
+// its own copy of the rules.
 (function (root) {
   'use strict';
 
   const { WHITE, BLACK } = Chess;
 
-  const PEERJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.5/peerjs.min.js';
-  const ID_PREFIX = 'chessmess-';
+  const MQTT_URL = 'https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.16.0/mqtt.min.js';
+  // Tried in order; both players end up on the first one that answers.
+  const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+  const TOPIC_PREFIX = 'chessmess/v1/';
   const CODE_LETTERS = 'abcdefghjkmnpqrstuvwxyz23456789';   // no 0/o or 1/l/i to mix up
   const CODE_LENGTH = 6;
-  // A closed laptop or a dropped wifi connection does not always close the connection, so both
-  // sides send a ping now and then and give up on a friend they have not heard from for a while.
+  const BROKER_TIMEOUT_MS = 7000;
+  const JOIN_TIMEOUT_MS = 12000;
+  // A closed laptop or a dropped connection does not announce itself, so both sides send a ping now
+  // and then and give up on a friend they have not heard from for a while.
   const PING_MS = 4000, TIMEOUT_MS = 15000;
 
   const panelEl = document.getElementById('online');
@@ -21,29 +27,35 @@
   const actionsEl = document.getElementById('online-actions');
 
   let hooks = null;         // callbacks into the game (see open() at the bottom)
-  let peer = null, conn = null;
+  let client = null;        // the connection to the broker
+  let session = 0;          // bumped whenever a connection is abandoned, to ignore its late events
   let role = null;          // 'host' or 'guest'
   let code = null;
+  let me = null;            // this player's id in messages
+  let friend = null;        // the friend's id, while they are connected
+  let run = null;           // new on every connection, so a refreshed page starts counting afresh
+  let seq = 0;              // numbers this player's messages, so repeats can be spotted
+  let seen = { sender: null, seq: 0 };
   let hostColor = WHITE;
   let started = false;      // the host has started at least one game with this friend
   let over = false;         // the current game has finished
   let rematch = { me: false, them: false };
-  let lastHeard = 0, pinger = null;
+  let lastHeard = 0, pinger = null, joinTimer = null;
   let loading = null;
 
-  // PeerJS is only fetched once someone actually wants to play online, so everything else keeps
-  // working offline.
-  function loadPeerJs() {
-    if (root.Peer) return Promise.resolve();
+  // The MQTT library is only fetched once someone actually wants to play online, so everything else
+  // keeps working offline.
+  function loadMqtt() {
+    if (root.mqtt) return Promise.resolve();
     if (!loading) {
       loading = new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = PEERJS_URL;
+        script.src = MQTT_URL;
         script.onload = resolve;
         script.onerror = () => {
           loading = null;
           script.remove();
-          reject(new Error('PeerJS did not load'));
+          reject(new Error('mqtt.js did not load'));
         };
         document.head.append(script);
       });
@@ -51,8 +63,8 @@
     return loading;
   }
 
-  function newCode() {
-    const values = crypto.getRandomValues(new Uint32Array(CODE_LENGTH));
+  function randomText(length) {
+    const values = crypto.getRandomValues(new Uint32Array(length));
     return Array.from(values, (v) => CODE_LETTERS[v % CODE_LETTERS.length]).join('');
   }
 
@@ -63,8 +75,53 @@
     return new RegExp(`^[${CODE_LETTERS}]{${CODE_LENGTH}}$`).test(value) ? value : null;
   }
 
-  function send(message) {
-    if (conn && conn.open) conn.send(message);
+  // A guest keeps the same id when the page is refreshed, so the host knows it is the same friend
+  // coming back rather than a stranger with the link.
+  function guestId(gameCode) {
+    const key = 'chessMess.guest.' + gameCode;
+    try {
+      const id = sessionStorage.getItem(key) || randomText(12);
+      sessionStorage.setItem(key, id);
+      return id;
+    } catch {
+      return randomText(12);
+    }
+  }
+
+  const topic = (sender) => TOPIC_PREFIX + code + '/' + sender;
+
+  // Every message carries its sender, and its recipient (none for a guest's hello).
+  function send(message, recipient = friend) {
+    if (!client) return;
+    const payload = JSON.stringify({ ...message, sender: me, recipient, run, seq: ++seq });
+    client.publish(topic(role), payload, { qos: 1 });
+  }
+
+  // Connects to the first broker that answers.
+  async function connectBroker(current) {
+    for (const url of BROKERS) {
+      try {
+        const c = await new Promise((resolve, reject) => {
+          const attempt = root.mqtt.connect(url, { connectTimeout: BROKER_TIMEOUT_MS, reconnectPeriod: 2000 });
+          const timer = setTimeout(() => {
+            attempt.end(true);
+            reject(new Error('timed out'));
+          }, BROKER_TIMEOUT_MS);
+          attempt.once('connect', () => {
+            clearTimeout(timer);
+            resolve(attempt);
+          });
+        });
+        if (current !== session) {
+          c.end(true);
+          return null;
+        }
+        return c;
+      } catch {
+        // Try the next one.
+      }
+    }
+    throw new Error('No broker answered');
   }
 
   // ---------------------------------------------------------------------------
@@ -126,7 +183,7 @@
         field.select();
       }
     }, true);
-    const text = ['Send your friend this link. The game starts as soon as they open it. Code: ', strong(code)];
+    const text = ['Send your friend this link and keep this page open. The game starts as soon as they open it. Code: ', strong(code)];
     if (location.protocol === 'file:') {
       const note = document.createElement('small');
       note.className = 'online-note';
@@ -162,102 +219,77 @@
   // Connecting
   // ---------------------------------------------------------------------------
 
+  // Loads the library and connects to a broker; returns false (having said why) if that fails or
+  // the player gave up in the meantime.
+  async function connect(current) {
+    run = randomText(8);
+    seq = 0;
+    try {
+      await loadMqtt();
+      if (current !== session) return false;
+      const c = await connectBroker(current);
+      if (!c) return false;
+      client = c;
+    } catch {
+      if (current === session) fail('Could not reach the online game service. Check your internet connection and try again.');
+      return false;
+    }
+    client.on('message', (_, payload) => {
+      if (current === session) receiveRaw(payload);
+    });
+    return true;
+  }
+
   async function host() {
     disconnect();
+    const current = session;
     role = 'host';
-    code = newCode();
+    code = randomText(CODE_LENGTH);
+    me = randomText(12);
     hostColor = hooks.preferredColor();
     show('Setting up your game…', button('Cancel', () => idle()));
     hooks.wait('Setting up your game…');
-    try {
-      await loadPeerJs();
-    } catch {
-      return fail('Could not load the online library. Check your internet connection and try again.');
-    }
-    if (role !== 'host') return;
-    const p = peer = new Peer(ID_PREFIX + code);
-    p.on('open', () => {
-      if (peer === p) waitingForGuest();
+    if (!await connect(current)) return;
+    client.subscribe(topic('guest'), { qos: 1 }, () => {
+      if (current === session) waitingForGuest();
     });
-    p.on('connection', (c) => {
-      if (peer !== p) return;
-      if (conn) {
-        // Someone else with the link while the friend is still here.
-        c.on('open', () => {
-          c.send({ type: 'full' });
-          setTimeout(() => c.close(), 1000);
-        });
-        return;
-      }
-      attach(c, guestArrived);
-    });
-    listen(p);
   }
 
   async function join(text) {
     const wanted = parseCode(text);
     if (!wanted) return fail(`That code does not look right. It should be ${CODE_LENGTH} letters and numbers.`);
     disconnect();
+    const current = session;
     role = 'guest';
     code = wanted;
+    me = guestId(code);
     show(['Joining game ', strong(code), '…'], button('Cancel', () => idle()));
     hooks.wait('Joining your friend’s game…');
-    try {
-      await loadPeerJs();
-    } catch {
-      return fail('Could not load the online library. Check your internet connection and try again.');
-    }
-    if (role !== 'guest') return;
-    const p = peer = new Peer();
-    p.on('open', () => {
-      if (peer === p) attach(p.connect(ID_PREFIX + code, { reliable: true }), () => show('Connected. Starting the game…'));
-    });
-    listen(p);
-  }
-
-  function listen(p) {
-    // Losing the link to the PeerJS server does not affect a game in progress, but it is needed
-    // for a friend to (re)join, so get it back.
-    p.on('disconnected', () => {
-      if (peer === p && !p.destroyed) p.reconnect();
-    });
-    p.on('error', (err) => {
-      if (peer !== p) return;
-      if (err.type === 'unavailable-id' && role === 'host') return host();   // code taken: pick another
-      if (err.type === 'peer-unavailable') {
-        return fail(`Could not find game ${code}. Check the code, and that your friend still has the game open.`);
-      }
-      if (err.type === 'browser-incompatible') return fail('This browser cannot play online. Try a recent Chrome, Firefox, Edge or Safari.');
-      // Other errors while a game is going on are followed by the connection closing, which is handled there.
-      if (!conn) fail(`Could not connect (${err.type}). Check your internet connection and try again.`);
+    if (!await connect(current)) return;
+    client.subscribe(topic('host'), { qos: 1 }, () => {
+      if (current !== session) return;
+      send({ type: 'hello' });
+      joinTimer = setTimeout(() => {
+        if (current === session && !friend) {
+          fail(`Could not find game ${code}. Check the code, and that your friend still has the game open (with the link showing).`);
+        }
+      }, JOIN_TIMEOUT_MS);
     });
   }
 
-  function attach(c, onOpen) {
-    c.on('open', () => {
-      conn = c;
-      lastHeard = Date.now();
-      clearInterval(pinger);
-      pinger = setInterval(() => {
-        if (Date.now() - lastHeard > TIMEOUT_MS) lost(c);
-        else send({ type: 'ping' });
-      }, PING_MS);
-      onOpen();
-    });
-    c.on('data', (message) => {
-      if (conn !== c) return;
-      lastHeard = Date.now();
-      receive(message);
-    });
-    c.on('close', () => lost(c));
-    c.on('error', () => lost(c));
-  }
-
-  function lost(c) {
-    if (conn !== c) return;
-    conn = null;
+  function startPinging() {
     clearInterval(pinger);
-    c.close();
+    lastHeard = Date.now();
+    pinger = setInterval(() => {
+      if (Date.now() - lastHeard > TIMEOUT_MS) lost();
+      else send({ type: 'ping' });
+    }, PING_MS);
+  }
+
+  function lost() {
+    if (!friend) return;
+    friend = null;
+    clearInterval(pinger);
     if (role === 'host') {
       // Stay open so the friend can come back with the same link, e.g. after refreshing the page.
       show(['Your friend disconnected. They can rejoin with the same link or the code ', strong(code), '.'], leaveButton());
@@ -269,19 +301,54 @@
   }
 
   function disconnect() {
+    if (friend) send({ type: 'bye' });
+    session++;
     clearInterval(pinger);
-    const c = conn, p = peer;
-    conn = peer = null;
-    role = null;
+    clearTimeout(joinTimer);
+    if (client) client.end();
+    client = friend = role = null;
+    seen = { sender: null, seq: 0 };
     started = over = false;
     rematch = { me: false, them: false };
-    if (c) c.close();
-    if (p) p.destroy();
   }
+
+  // Let the friend know straight away when this page is closed.
+  addEventListener('pagehide', () => {
+    if (friend) send({ type: 'bye' });
+  });
 
   // ---------------------------------------------------------------------------
   // The game itself
   // ---------------------------------------------------------------------------
+
+  function receiveRaw(payload) {
+    let message;
+    try {
+      message = JSON.parse(payload.toString());
+    } catch {
+      return;
+    }
+    if (!message || typeof message !== 'object' || message.sender === me) return;
+    if (message.recipient && message.recipient !== me) return;
+    // The broker may deliver a message twice.
+    const sender = message.sender + '/' + message.run;
+    if (sender === seen.sender && message.seq <= seen.seq) return;
+    seen = { sender, seq: message.seq };
+
+    if (role === 'host' && message.type === 'hello') return welcome(message.sender);
+    if (role === 'host' && message.sender !== friend) return;
+    if (role === 'guest' && friend && message.sender !== friend) return;
+    lastHeard = Date.now();
+    receive(message);
+  }
+
+  // A guest saying hello: the friend (re)joining, or somebody else with the link.
+  function welcome(from) {
+    if (friend && friend !== from) return send({ type: 'full' }, from);
+    friend = from;
+    startPinging();
+    guestArrived();
+  }
 
   // The host's side of a friend (re)joining: carry on with the game in progress, or start a new one.
   function guestArrived() {
@@ -329,9 +396,14 @@
   }
 
   function receive(message) {
-    switch (message && message.type) {
+    switch (message.type) {
       case 'start':
         if (role !== 'guest') return;
+        clearTimeout(joinTimer);
+        if (!friend) {
+          friend = message.sender;
+          startPinging();
+        }
         over = false;
         rematch = { me: false, them: false };
         playing();
@@ -362,6 +434,9 @@
       case 'rematch':
         rematch.them = true;
         if (!maybeRematch() && over) gameOver();
+        break;
+      case 'bye':
+        lost();
         break;
       case 'full':
         fail('That game already has two players.');
