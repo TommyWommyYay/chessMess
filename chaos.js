@@ -204,7 +204,14 @@
     return ms;
   }
 
+  // A short stamp of the chaos rules. Online, both players' copies must agree on it, or the drafts
+  // would come at different times and offer different cards on the two screens.
+  const FINGERPRINT = hash(JSON.stringify([
+    ROUNDS, ROUND_MS, OFFERED, RARITIES, POWERS, POWERUPS.map((p) => [p.id, p.type, p.rarity.id]),
+  ])).toString(36);
+
   root.Chaos = {
+    FINGERPRINT,
     CLOCK, ROUNDS, ROUND_MS, PICK_MS, NONE, POWERUPS, RARITIES, WHITE,
     find: (id) => BY_ID.get(id) || null,
     offers, apply, choose, timeBonus,

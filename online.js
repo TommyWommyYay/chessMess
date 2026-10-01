@@ -14,6 +14,10 @@
   // Tried in order; both players end up on the first one that answers.
   const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
   const TOPIC_PREFIX = 'chessmess/v1/';
+  // Both players' copies of the game must play by the same rules. An installed app can be a version
+  // behind until it is closed and opened again, so players compare versions when they meet.
+  const VERSION = '2/' + Chaos.FINGERPRINT;
+  const UPDATE_HELP = 'To update: close the chessMess app completely and open it again (or refresh the page), while online.';
   const CODE_LETTERS = 'abcdefghjkmnpqrstuvwxyz23456789';   // no 0/o or 1/l/i to mix up
   const CODE_LENGTH = 6;
   const BROKER_TIMEOUT_MS = 7000;
@@ -233,6 +237,12 @@
     }
   }
 
+  // A guest whose copy of the game is a different version from the host's.
+  function mismatch() {
+    fail('Your friend has a different version of chessMess from yours, so you can’t play together until you both have the latest. ' +
+      UPDATE_HELP + ' Then open the link again.');
+  }
+
   function fail(message) {
     idle(message);
   }
@@ -290,7 +300,7 @@
     if (!await connect(current)) return;
     client.subscribe(topic('host'), { qos: 1 }, () => {
       if (current !== session) return;
-      send({ type: 'hello', name: hooks.myName() });
+      send({ type: 'hello', name: hooks.myName(), version: VERSION });
       joinTimer = setTimeout(() => {
         if (current === session && !friend) {
           fail(`Could not find game ${code}. Check the code, and that your friend still has the game open (with the link showing).`);
@@ -370,8 +380,16 @@
   }
 
   // A guest saying hello: the friend (re)joining, or somebody else with the link.
-  function welcome({ sender, name }) {
+  function welcome({ sender, name, version }) {
     if (friend && friend !== sender) return send({ type: 'full' }, sender);
+    if (version !== VERSION) {
+      // Tell them (a copy older than this check just doesn't hear back), and keep waiting for a friend
+      // with a matching copy.
+      send({ type: 'version', version: VERSION }, sender);
+      show(['Your friend tried to join with a different version of chessMess, so the game couldn’t start. ',
+        'Ask them to update and open your link again. ' + UPDATE_HELP + ' Code: ', strong(code)], button('Cancel', () => idle()));
+      return;
+    }
     friend = sender;
     setFriendName(name);
     startPinging();
@@ -383,7 +401,7 @@
   function guestArrived() {
     const { state, finished } = hooks.snapshot();
     if (started && !finished) {
-      send({ type: 'start', color: hostColor ^ 8, state, name: hooks.myName() });
+      send({ type: 'start', color: hostColor ^ 8, state, name: hooks.myName(), version: VERSION });
       playing(`${Them()} is back.`);
       hooks.resume();
       return;
@@ -398,7 +416,7 @@
     over = false;
     rematch = { me: false, them: false };
     const state = { setup: hooks.setup(), timeline: [] };
-    send({ type: 'start', color: hostColor ^ 8, state, name: hooks.myName() });
+    send({ type: 'start', color: hostColor ^ 8, state, name: hooks.myName(), version: VERSION });
     hooks.begin(hostColor, state);
     playing();
   }
@@ -431,6 +449,7 @@
       case 'start':
         if (role !== 'guest') return;
         clearTimeout(joinTimer);
+        if (message.version !== VERSION) return mismatch();
         if (!friend) {
           friend = message.sender;
           startPinging();
@@ -495,6 +514,12 @@
         break;
       case 'full':
         fail('That game already has two players.');
+        break;
+      case 'version':
+        if (role === 'guest') {
+          clearTimeout(joinTimer);
+          mismatch();
+        }
         break;
     }
   }
