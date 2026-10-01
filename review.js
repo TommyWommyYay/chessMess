@@ -3,7 +3,7 @@
 (function (root) {
   'use strict';
 
-  const { Game, analyse, moveToSan, sameMove, MATE, WHITE } = Chess;
+  const { Game, analyse, moveToSan, sameMove, MATE, WHITE, BLACK } = Chess;
 
   // A move is judged by how many percentage points it knocked off the mover's chance of winning
   // (the way Lichess does it), so that dropping a pawn matters more in a level game than in a
@@ -153,9 +153,20 @@
   // Opening and closing
   // ---------------------------------------------------------------------------
 
-  // Plays the saved moves through from the start, keeping every position along the way.
+  // Plays the saved moves through from the start, keeping every position along the way. In a chaos
+  // game the powerups are handed out again at the moves where they were picked.
   function replay(record) {
     const g = new Game(record.fen);
+    const rounds = Array.isArray(record.powerups) ? record.powerups : [];
+    const pickUp = (ply) => {
+      for (const { picks } of rounds.filter((r) => r.ply === ply)) {
+        for (const color of [WHITE, BLACK]) {
+          const powerup = Chaos.find(picks && picks[color]);
+          if (powerup) g.setPower(color | powerup.type, powerup.id);
+        }
+      }
+    };
+    pickUp(0);
     const positions = [Game.restore(g.snapshot())], moves = [];
     for (const saved of record.moves) {
       const legal = g.legalMoves();
@@ -163,6 +174,7 @@
       if (!move) break;
       moves.push({ ...move, san: moveToSan(g, move, legal), color: g.turn, number: g.fullmove });
       g.make(move);
+      pickUp(moves.length);
       positions.push(Game.restore(g.snapshot()));
     }
     return { positions, moves };

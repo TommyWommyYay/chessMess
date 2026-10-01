@@ -28,6 +28,7 @@
   };
   const LOW_TIME_MS = 20 * 1000;     // below this a clock turns red and shows tenths of a second
   const DRAFT_DELAY_MS = 600;        // lets the last move land before a chaos round covers the board
+  const TURN_BOARD_MS = 900;         // on a shared screen, how long after a move the board turns round
 
   const boardEl = document.getElementById('board');
   const boardWrapEl = document.getElementById('board-wrap');
@@ -85,6 +86,7 @@
   // An online game needs connecting first, so the page never opens on one (except from a link).
   let mode = joinCode ? 'online' : MODES.includes(saved.mode) && saved.mode !== 'online' ? saved.mode : 'computer';
   let game, playerColor, legal, selected, lastMove, positions, history, result;
+  let facing = WHITE;       // on a shared screen, the side the board is turned towards
   let lastFx = 0;           // what chaos powerups did along with the last move (see Game.lastFx)
   let powerTime = 0;        // clock time a chaos powerup gave for the last move
   let redoStack = [];       // moves taken back with Undo, the next one to redo last
@@ -379,6 +381,7 @@
     gameSetup = state ? receivedSetup(state.setup) : chosenSetup();
     game = new Game(gameSetup.fen);
     startTurn = game.turn;
+    facing = game.turn;
     playerColor = mode === 'local' ? WHITE : color ?? chosenColor();
     gameGm = mode === 'computer' ? Grandmasters.find(opponent) : null;
     gameRating = gameGm ? gameGm.rating : sliderRating();
@@ -474,12 +477,13 @@
     scores[mode][column]++;
     const ratingText = mode === 'computer' ? rate(winner === null ? 0.5 : iWon ? 1 : 0) : '';
     save();
-    // Kept so the game can be reviewed afterwards, even after the page is reloaded. A chaos game
-    // cannot be: its rounds change the board in ways the review cannot follow.
-    if (history.length && !chaos) {
+    // Kept so the game can be reviewed afterwards, even after the page is reloaded. For a chaos game
+    // that includes the powerups each side picked, and how many moves into the game.
+    if (history.length) {
       lastGame = {
         moves: history.map(({ from, to, promo }) => ({ from, to, promo })),
         fen: gameSetup.fen === START_FEN ? undefined : gameSetup.fen,
+        powerups: chaos ? chaosPicks() : undefined,
         player: playerColor === BLACK ? 'black' : 'white',
         opponent: mode,
         level: gameRating,
@@ -494,7 +498,6 @@
     let title = 'Draw', mood = 'draw';
     if (winner !== null && mode === 'local') [title, mood] = [capitalise(sideName(winner)) + ' wins!', 'win'];
     else if (winner !== null) [title, mood] = iWon ? ['You win!', 'win'] : ['Defeat', 'loss'];
-    const reviewable = !chaos;
     // Let the final move (and any explosion) play out before announcing the result.
     gameOverTimer = setTimeout(() => {
       document.getElementById('game-over-title').textContent = title;
@@ -502,7 +505,6 @@
       const ratingLine = document.getElementById('game-over-rating');
       ratingLine.textContent = ratingText;
       ratingLine.hidden = !ratingText;
-      document.getElementById('review-game').hidden = !reviewable;
       playAgainEl.textContent = mode === 'online' ? 'Rematch' : 'Play again';
       gameOverEl.className = 'overlay ' + mood;
       gameOverEl.hidden = false;
@@ -547,6 +549,17 @@
     const winner = loser ^ 8, name = capitalise(sideName(loser)), other = sideName(winner);
     if (!canMate(winner)) return [null, `${name} ran out of time, but ${other} can’t checkmate — a draw.`];
     return [winner, `${name} ran out of time — ${other} ${other === 'you' ? 'win' : 'wins'}.`];
+  }
+
+  // The chaos rounds played so far: [{ ply, picks }], ply being the number of moves made before it.
+  function chaosPicks() {
+    let ply = 0;
+    const rounds = [];
+    for (const entry of timeline) {
+      if (entry.type === 'chaos') rounds.push({ ply, picks: entry.picks });
+      else ply++;
+    }
+    return rounds;
   }
 
   // Makes a move on the board without any of the presentation; returns the new position's key.
@@ -595,7 +608,24 @@
       animateMove(move, mover, drop);
       animatePowers(move, mover, drop);
     }
+    if (mode === 'local' && !result) turnBoard();
     if (!result && !drafts && seat(game.turn) === 'computer') computerTurn();
+  }
+
+  // On a shared screen, once a move has played out, the board spins round to face the side to move.
+  function turnBoard() {
+    const id = gameId, ply = history.length;
+    setTimeout(() => {
+      if (id !== gameId || ply !== history.length || mode !== 'local' || result || facing === game.turn) return;
+      facing = game.turn;
+      render();
+      if (!reviewing && !editing && !menuOpen) {
+        boardEl.animate([
+          { transform: 'rotate(180deg) scale(0.85)', opacity: 0.3 },
+          { transform: 'rotate(0deg) scale(1)', opacity: 1 },
+        ], { duration: 500, easing: 'cubic-bezier(0.3, 0.7, 0.3, 1)' });
+      }
+    }, TURN_BOARD_MS);
   }
 
   // Ends the game if the position calls for it. `key` is the position's after a move; `byChaos` is
@@ -904,6 +934,7 @@
     }
     redoStack.push(...undone);
     replay(history);
+    facing = game.turn;
     dealing = false;
     promotionEl.hidden = true;
     render();
@@ -925,8 +956,10 @@
     playMove(redoStack.pop(), undefined, true);
   }
 
+  // (On a shared screen, not until the board has turned to face the side to move.)
   function playerCanMove() {
-    return !reviewing && !editing && !waiting && !drafting && !result && seat(game.turn) === 'me' && promotionEl.hidden;
+    return !reviewing && !editing && !waiting && !drafting && !result && seat(game.turn) === 'me' && promotionEl.hidden &&
+      (mode !== 'local' || facing === game.turn);
   }
 
   function onSquareClick(sq) {
@@ -1361,7 +1394,7 @@
   // Draws a position onto the board and returns its squares, indexed by square number. The live
   // game and the review both draw through here. `movable` is the color whose pieces can be picked up.
   // Pieces with a chaos powerup (`powers`, as the engine keeps them) wear its badge.
-  function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1, powers = null } = {}) {
+  function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1, powers = position.power } = {}) {
     const checkedKing = position.inCheck() ? position.kingSq[position.turn] : -1;
     const ordered = [];
     flipped = flip;
@@ -1425,7 +1458,7 @@
       renderEditor();
     } else {
       drawBoard(game, {
-        flip: playerColor === BLACK,
+        flip: (mode === 'local' ? facing : playerColor) === BLACK,
         lastMove,
         selected,
         targets: new Set(legal.filter((m) => m.from === selected).map((m) => m.to)),
@@ -1531,10 +1564,11 @@
   };
   const VARIANT_ICONS = { classic: '♟︎', blitz: '⚡', rapid: '⏱️', long: '🕰️', chaos: '🌀', custom: '✏️' };
 
-  function card({ icon, title, text = '', chosen = false, onClick }) {
+  // `resume` marks the card that goes back to the game in progress, which stands out from the rest.
+  function card({ icon, title, text = '', resume = false, onClick }) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'menu-card' + (chosen ? ' chosen' : '');
+    button.className = 'menu-card' + (resume ? ' resume' : '');
     const iconEl = document.createElement('span');
     iconEl.className = 'menu-icon';
     if (typeof icon === 'string') iconEl.textContent = icon;
@@ -1619,7 +1653,7 @@
     home() {
       const items = [];
       if (gameInProgress()) {
-        items.push(card({ icon: '▶', title: 'Back to your game', text: describeGame(), chosen: true, onClick: closeMenu }));
+        items.push(card({ icon: '▶', title: 'Back to your game', text: describeGame(), resume: true, onClick: closeMenu }));
       }
       items.push(
         card({ icon: '🤖', title: 'Play the computer', text: 'Our engine at any strength, or a top-10 grandmaster.', onClick: () => go('computer', 'Computer', 'computer') }),
@@ -1652,7 +1686,6 @@
         icon: avatar(gm),
         title: gm.name,
         text: gm.rank ? `#${gm.rank} in the world · ${gm.country} · ${gm.rating}` : `Any strength from ${MIN_RATING} to ${MAX_RATING}`,
-        chosen: opponent === gm.id,
         onClick: () => {
           opponent = gm.id;
           stockfishFailed = false;
@@ -1707,7 +1740,6 @@
         icon: VARIANT_ICONS[id],
         title: VARIANTS[id].name,
         text: VARIANT_TEXT[id],
-        chosen: variant === id,
         onClick: () => {
           variant = id;
           save();
@@ -1725,7 +1757,6 @@
           icon: '⏱️',
           title: name,
           text: increment ? `${minutes} minutes each, plus ${increment} seconds for every move` : `${minutes} minutes each`,
-          chosen: timeChoice[variant] === index,
           onClick: () => {
             timeChoice[variant] = index;
             save();
@@ -1745,9 +1776,9 @@
       const online = menuMode === 'online';
       const items = [
         nameField('Your name', 'me', 'You'),
-        card({ icon: pieceEl(WHITE | KING), title: 'White', text: 'You move first.', chosen: side === 'white', onClick: () => choose('white') }),
-        card({ icon: pieceEl(BLACK | KING), title: 'Black', text: `${online ? 'Your friend' : 'The computer'} moves first.`, chosen: side === 'black', onClick: () => choose('black') }),
-        card({ icon: '🎲', title: 'Random', text: 'Toss a coin for it.', chosen: side === 'random', onClick: () => choose('random') }),
+        card({ icon: pieceEl(WHITE | KING), title: 'White', text: 'You move first.', onClick: () => choose('white') }),
+        card({ icon: pieceEl(BLACK | KING), title: 'Black', text: `${online ? 'Your friend' : 'The computer'} moves first.`, onClick: () => choose('black') }),
+        card({ icon: '🎲', title: 'Random', text: 'Toss a coin for it.', onClick: () => choose('random') }),
       ];
       return {
         title: online ? 'Which side do you want?' : 'Which side do you play?',
@@ -1831,7 +1862,7 @@
       item.append(button);
       return item;
     }));
-    menuBackEl.hidden = !trail.length;
+    menuBackEl.parentElement.hidden = !trail.length;
   }
 
   function openMenu() {
