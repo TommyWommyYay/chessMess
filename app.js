@@ -348,16 +348,23 @@
 
   function computerTurn() {
     const token = ++turnToken;
-    // A reply that was taken back with Undo comes back as it was, instead of being thought out again.
-    const redoing = redoStack.length > 0;
+    // A reply that was taken back with Undo comes back as it was, instead of being thought out again
+    // (unless it no longer fits, after a chaos round that went differently the second time).
+    const next = redoStack.length ? legal.find((m) => sameMove(m, redoStack[redoStack.length - 1])) : null;
+    if (!next) redoStack = [];
+    const redoing = Boolean(next);
     // Wait at least long enough for the player's move (or the opening deal) to finish animating;
     // less long when the clock is ticking.
     const wait = redoing ? 450 : !lastMove ? 1300 : clock ? 400 : 700;
     const pause = new Promise((resolve) => setTimeout(resolve, wait));
     Promise.all([redoing ? null : think(), pause]).then(([move]) => {
       if (token !== turnToken || result || drafting) return;
-      if (redoing) playMove(redoStack.pop(), undefined, true);
-      else if (move) playMove(move);
+      if (redoing) {
+        redoStack.pop();
+        playMove(next, undefined, true);
+      } else if (move) {
+        playMove(move);
+      }
     });
   }
 
@@ -431,13 +438,15 @@
       if (!move) return false;
       if (clock) clock.started = true;
       advance(move);
+      if (entry.clock) timeline[timeline.length - 1].clock = entry.clock;
     }
     legal = computeLegal();
     return true;
   }
 
   function validPicks(round, picks) {
-    return Boolean(picks) && [WHITE, BLACK].every((color) => Chaos.offers(gameSetup.seed, round, color, game).includes(picks[color]));
+    const offered = Chaos.offers(gameSetup.seed, round, game);
+    return Boolean(picks) && [WHITE, BLACK].every((color) => offered[color].includes(picks[color]));
   }
 
   // An online game as it stands, for a friend who (re)joins.
@@ -597,6 +606,12 @@
     if (!redoing) redoStack = [];
     clockMoved(mover, reportedClock, move);
     const key = advance(move);
+    // Undo puts the clocks back the way they stood after this move.
+    if (clock) {
+      timeline[timeline.length - 1].clock = {
+        left: { ...clock.left }, mark: { ...clock.mark }, used: clock.used, started: clock.started,
+      };
+    }
     selected = -1;
     legal = computeLegal();
     if (mode === 'online' && seat(mover) === 'me') Online.sendMove(move, history.length - 1, clock ? clock.left[mover] : null);
@@ -751,7 +766,7 @@
     const round = chaos.round, seed = gameSetup.seed;
     draft = {
       round,
-      offers: { [WHITE]: Chaos.offers(seed, round, WHITE, game), [BLACK]: Chaos.offers(seed, round, BLACK, game) },
+      offers: Chaos.offers(seed, round, game),
       picks: {},
     };
     drafting = true;
@@ -789,7 +804,7 @@
       const held = Chaos.find(game.power[color | powerup.type]);
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'draft-choice';
+      button.className = 'draft-choice rarity-' + powerup.rarity.id;
       const icon = document.createElement('span');
       icon.className = 'draft-icon';
       icon.textContent = powerup.icon;
@@ -798,7 +813,10 @@
       const pieces = document.createElement('span');
       pieces.className = 'draft-pieces';
       pieces.textContent = powerup.pieces;
-      name.append(pieces);
+      const rarity = document.createElement('span');
+      rarity.className = 'draft-rarity';
+      rarity.textContent = powerup.rarity.name;
+      name.append(pieces, rarity);
       const text = document.createElement('span');
       text.className = 'draft-text';
       text.textContent = powerup.text + (held ? ` Replaces your ${held.icon} ${held.name}.` : '');
@@ -807,6 +825,9 @@
       return button;
     });
     showDraftCard(title, choices);
+    const rarities = draft.offers[color].map((id) => Chaos.find(id).rarity.name);
+    document.getElementById('draft-round').textContent += rarities[0] === rarities[1]
+      ? ` · both sides get two ${rarities[0]}s` : ` · both sides get ${rarities.map((r) => (/^[AEIOU]/.test(r) ? 'an ' : 'a ') + r).join(' and ')}`;
     // A pick is made at random for anyone who takes too long.
     const deadline = performance.now() + Chaos.PICK_MS;
     const bar = document.querySelector('#draft-timer div');
@@ -891,9 +912,10 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Undo and redo, for untimed games against the computer and on a shared screen. Against the
-  // computer, Undo takes back your last move along with the computer's reply to it (or stops the
-  // computer thinking about one), so it is your move again.
+  // Undo and redo, against the computer and on a shared screen, in untimed games and chaos ones.
+  // Against the computer, Undo takes back your last move along with the computer's reply to it (or
+  // stops the computer thinking about one), so it is your move again. In a chaos game it also takes
+  // back any powerup draft that came after those moves, and the clocks go back with them.
   // ---------------------------------------------------------------------------
 
   function colorOfPly(ply) {
@@ -901,26 +923,41 @@
   }
 
   function undoAllowed() {
-    return mode !== 'online' && !clock && !chaos && !reviewing && !editing && !result;
+    return mode !== 'online' && (!clock || Boolean(chaos)) && !reviewing && !editing && !result && !drafting && !menuOpen;
   }
 
   function canUndo() {
     return undoAllowed() && history.some((_, ply) => seat(colorOfPly(ply)) === 'me');
   }
 
+  // (A move can only be redone while it is still legal: a chaos round may have gone differently.)
   function canRedo() {
-    return undoAllowed() && redoStack.length > 0 && seat(game.turn) === 'me';
+    return undoAllowed() && redoStack.length > 0 && seat(game.turn) === 'me' &&
+      legal.some((m) => sameMove(m, redoStack[redoStack.length - 1]));
   }
 
-  // Sets the game up afresh with `moves` played.
-  function replay(moves) {
+  // Sets the game up afresh with `entries` of its timeline played (moves and chaos rounds), and puts
+  // the clocks back the way they stood after the last of those moves.
+  function rebuild(entries) {
     game = new Game(gameSetup.fen);
     history = [];
     timeline = [];
     lastMove = null;
     positions = new Map([[game.key(), 1]]);
-    for (const move of moves) advance(move);
+    if (chaos) chaos.round = 0;
     legal = computeLegal();
+    for (const entry of entries) if (!replayEntry(entry)) break;
+    if (clock) {
+      stopClock();
+      const after = [...timeline].reverse().find((e) => e.type === 'move' && e.clock);
+      const base = clock.base;
+      const state = after ? after.clock
+        : { left: { [WHITE]: base, [BLACK]: base }, mark: { [WHITE]: base, [BLACK]: base }, used: 0, started: false };
+      clock.left = { ...state.left };
+      clock.mark = { ...state.mark };
+      clock.used = state.used;
+      clock.started = state.started;
+    }
     selected = -1;
   }
 
@@ -933,7 +970,10 @@
       if (seat(colorOfPly(history.length)) === 'me') break;
     }
     redoStack.push(...undone);
-    replay(history);
+    // Everything from the first move taken back onwards goes, chaos rounds included.
+    let moves = 0;
+    const cut = timeline.findIndex((entry) => entry.type === 'move' && moves++ === history.length);
+    rebuild(timeline.slice(0, cut));
     facing = game.turn;
     dealing = false;
     promotionEl.hidden = true;
@@ -953,7 +993,9 @@
   function redo() {
     if (!canRedo()) return;
     promotionEl.hidden = true;
-    playMove(redoStack.pop(), undefined, true);
+    const next = redoStack.pop();
+    const move = legal.find((m) => sameMove(m, next));
+    playMove(move, undefined, true);
   }
 
   // (On a shared screen, not until the board has turned to face the side to move.)
@@ -1397,6 +1439,7 @@
   function drawBoard(position, { flip = false, lastMove = null, selected = -1, targets = new Set(), movable = -1, powers = position.power } = {}) {
     const checkedKing = position.inCheck() ? position.kingSq[position.turn] : -1;
     const ordered = [];
+    tipEl.hidden = true;
     flipped = flip;
     squareEls = [];
 
@@ -1423,8 +1466,9 @@
         if (powerup) {
           label += ' with ' + powerup.name;
           const badge = document.createElement('span');
-          badge.className = 'power-badge ' + ((piece & 8) === WHITE ? 'white' : 'black');
+          badge.className = `power-badge ${(piece & 8) === WHITE ? 'white' : 'black'} rarity-${powerup.rarity.id}`;
           badge.textContent = powerup.icon;
+          badge.dataset.tip = powerTip(powerup);
           el.append(badge);
         }
       }
@@ -1469,7 +1513,7 @@
     renderClocks();
     // Only the actions that make sense in this kind of game.
     const offline = mode !== 'online';
-    undoEl.hidden = redoEl.hidden = !(offline && !clock && !chaos);
+    undoEl.hidden = redoEl.hidden = !(offline && (!clock || chaos));
     editPositionEl.hidden = !(offline && gameSetup.variant === 'custom');
     document.getElementById('new-game').hidden = !offline;
     resignEl.disabled = Boolean(result) || waiting || editing;
@@ -1498,6 +1542,35 @@
     }
   }
 
+  // What a powerup does, for its tooltip.
+  function powerTip(powerup) {
+    return `${powerup.icon} ${powerup.name} · ${powerup.rarity.name} · ${powerup.pieces}\n${powerup.text}`;
+  }
+
+  // A tooltip for anything with a data-tip (the powerup emoji): on hover with a mouse, on a tap with
+  // a finger.
+  const tipEl = document.createElement('div');
+  tipEl.className = 'tip';
+  tipEl.setAttribute('role', 'tooltip');
+  tipEl.hidden = true;
+  document.body.append(tipEl);
+
+  document.addEventListener('pointerover', (event) => {
+    const target = event.target.closest && event.target.closest('[data-tip]');
+    if (!target || (drag && drag.lifted)) {
+      tipEl.hidden = true;
+      return;
+    }
+    tipEl.textContent = target.dataset.tip;
+    tipEl.hidden = false;
+    const box = target.getBoundingClientRect(), tip = tipEl.getBoundingClientRect();
+    const left = Math.min(Math.max(8, box.left + box.width / 2 - tip.width / 2), innerWidth - tip.width - 8);
+    const above = box.top - tip.height - 8;
+    tipEl.style.left = left + 'px';
+    tipEl.style.top = (above >= 8 ? above : box.bottom + 8) + 'px';
+  });
+  addEventListener('scroll', () => { tipEl.hidden = true; }, true);
+
   // The two clocks, beside the board: the top one for the side at the top.
   function renderClocks() {
     if (!clock || !game) return;
@@ -1517,10 +1590,14 @@
         el.querySelector('.clock-name').after(held);
       }
       const powerups = chaos ? [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING].map((type) => Chaos.find(game.power[color | type])).filter(Boolean) : [];
-      const text = powerups.map((p) => p.icon).join(' ');
+      const text = powerups.map((p) => p.icon).join('');
       if (held.textContent !== text) {
-        held.textContent = text;
-        held.title = powerups.map((p) => `${p.name} (${p.pieces.toLowerCase()}): ${p.text}`).join('\n');
+        held.replaceChildren(...powerups.map((p) => {
+          const icon = document.createElement('span');
+          icon.textContent = p.icon;
+          icon.dataset.tip = powerTip(p);
+          return icon;
+        }));
       }
     }
   }

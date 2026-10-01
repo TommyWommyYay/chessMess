@@ -12,7 +12,24 @@
   const CLOCK = { base: 5 * 60 * 1000, inc: 0 };
   const ROUND_MS = 45 * 1000;       // a draft every time the players have used this much time between them
   const PICK_MS = 12 * 1000;        // how long a player has to pick
-  const OFFERED = 3;
+  const OFFERED = 2;
+
+  // Rarities, as in Clash Royale. The stronger a powerup, the rarer, and in every draft both players
+  // are offered the same rarities (say a Rare and an Epic each), so neither gets the stronger hand.
+  // `weight` is how often a card of that rarity turns up.
+  const RARITIES = [
+    { id: 'common', name: 'Common', weight: 45 },
+    { id: 'rare', name: 'Rare', weight: 30 },
+    { id: 'epic', name: 'Epic', weight: 18 },
+    { id: 'legendary', name: 'Legendary', weight: 7 },
+  ];
+  const RARITY_OF = {
+    hog: 'common', recruits: 'common', barbarian: 'common', spear: 'common',
+    darkprince: 'common', guards: 'common', giantskeleton: 'common', collector: 'common',
+    bandit: 'rare', royalgiant: 'rare', valkyrie: 'rare', electro: 'rare', witch: 'rare', skeletonking: 'rare',
+    megaknight: 'epic', icewizard: 'epic', balloon: 'epic', cannon: 'epic', monk: 'epic', pump: 'epic',
+    ramrider: 'legendary', archerqueen: 'legendary',
+  };
   // Time the clock powerups give (see the page's clocks).
   const COLLECTOR_MS = 3000, PUMP_MS = 2000;
 
@@ -49,6 +66,7 @@
   for (const p of POWERUPS) {
     p.type = POWERS[p.id].type;
     p.pieces = PIECES[p.type];
+    p.rarity = RARITIES.find((r) => r.id === RARITY_OF[p.id]);
   }
   const BY_ID = new Map(POWERUPS.map((p) => [p.id, p]));
 
@@ -98,13 +116,51 @@
     return check;
   }
 
-  // The powerups `color` is offered in a round: none it already has, and none that would check the
-  // other king while it is `color`'s own move.
-  function offers(seed, round, color, g) {
-    return shuffle(random(seed, 'offer', round, color), POWERUPS.map((p) => p.id))
-      .filter((id) => g.power[color | POWERS[id].type] !== id)
-      .filter((id) => g.turn !== color || !givesCheck(g, id, color))
-      .slice(0, OFFERED);
+  // A rarity drawn at random, by weight.
+  function drawRarity(rand) {
+    let roll = rand() * RARITIES.reduce((sum, r) => sum + r.weight, 0);
+    for (const r of RARITIES) {
+      roll -= r.weight;
+      if (roll < 0) return r.id;
+    }
+    return RARITIES[0].id;
+  }
+
+  // The two powerups each side is offered in a round: { [WHITE]: [id, id], [BLACK]: [id, id] }. Both
+  // pairs have the same rarities. Nobody is offered a powerup they already have, nor one that would
+  // check the other king while it is their own move.
+  function offers(seed, round, g) {
+    const pools = {};
+    for (const color of [WHITE, WHITE ^ 8]) {
+      pools[color] = {};
+      for (const { id: rarity } of RARITIES) {
+        pools[color][rarity] = shuffle(random(seed, 'offer', round, color, rarity), POWERUPS.filter((p) => p.rarity.id === rarity).map((p) => p.id))
+          .filter((id) => g.power[color | POWERS[id].type] !== id)
+          .filter((id) => g.turn !== color || !givesCheck(g, id, color));
+      }
+    }
+    // Both sides need a powerup left of each rarity drawn (two of it, if both are the same).
+    const fits = (pair) => [WHITE, WHITE ^ 8].every((color) => pair[0] === pair[1]
+      ? pools[color][pair[0]].length >= 2
+      : pools[color][pair[0]].length >= 1 && pools[color][pair[1]].length >= 1);
+    const order = (pair) => pair.sort((a, b) => RARITIES.findIndex((r) => r.id === a) - RARITIES.findIndex((r) => r.id === b));
+    const rand = random(seed, 'rarity', round);
+    let pair = null;
+    for (let tries = 0; tries < 30 && !pair; tries++) {
+      const drawn = order([drawRarity(rand), drawRarity(rand)]);
+      if (fits(drawn)) pair = drawn;
+    }
+    // (If chance keeps landing on rarities someone has run out of, any pair that fits will do.)
+    if (!pair) {
+      const all = RARITIES.flatMap((a) => RARITIES.map((b) => order([a.id, b.id])));
+      pair = all.find(fits) || ['common', 'common'];
+    }
+    const hands = {};
+    for (const color of [WHITE, WHITE ^ 8]) {
+      const pool = pools[color];
+      hands[color] = (pair[0] === pair[1] ? pool[pair[0]].slice(0, 2) : [pool[pair[0]][0], pool[pair[1]][0]]).filter(Boolean);
+    }
+    return hands;
   }
 
   // Gives `color` its pick. Returns { color, powerup, replaced } (replaced: the powerup it swapped out).
@@ -141,7 +197,7 @@
   }
 
   root.Chaos = {
-    CLOCK, ROUND_MS, PICK_MS, POWERUPS, WHITE,
+    CLOCK, ROUND_MS, PICK_MS, POWERUPS, RARITIES, WHITE,
     find: (id) => BY_ID.get(id) || null,
     offers, apply, choose, timeBonus,
   };
