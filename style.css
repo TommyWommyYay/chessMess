@@ -2102,21 +2102,10 @@ main:not(.in-menu) .menu {
 .rarity-common { --rarity: #a5b4cf; --rarity-glow: rgba(165, 180, 207, 0.35); }
 .rarity-rare { --rarity: #fb923c; --rarity-glow: rgba(251, 146, 60, 0.4); }
 .rarity-epic { --rarity: #c084fc; --rarity-glow: rgba(192, 132, 252, 0.45); }
-.rarity-legendary { --rarity: #5eead4; --rarity-glow: rgba(94, 234, 212, 0.5); }
 
 .draft-choice[class*="rarity-"] {
   border-color: var(--rarity);
   box-shadow: inset 0 0 18px var(--rarity-glow);
-}
-
-.draft-choice.rarity-legendary {
-  background: linear-gradient(120deg, rgba(94, 234, 212, 0.22), rgba(192, 132, 252, 0.22), rgba(251, 191, 36, 0.18));
-  background-size: 200% 200%;
-  animation: legendary 4s ease-in-out infinite alternate;
-}
-
-@keyframes legendary {
-  to { background-position: 100% 100%; }
 }
 
 .draft-rarity {

@@ -446,7 +446,8 @@
 
   function validPicks(round, picks) {
     const offered = Chaos.offers(gameSetup.seed, round, game);
-    return Boolean(picks) && [WHITE, BLACK].every((color) => offered[color].includes(picks[color]));
+    return Boolean(picks) && [WHITE, BLACK].every((color) =>
+      offered[color].length ? offered[color].includes(picks[color]) : picks[color] === Chaos.NONE);
   }
 
   // An online game as it stands, for a friend who (re)joins.
@@ -746,8 +747,9 @@
   // kind of piece and lasts all game, unless a later pick for the same kind swaps it out.
   // ---------------------------------------------------------------------------
 
+  // (Never while an online game is waiting for the friend.)
   function chaosDue() {
-    return Boolean(chaos) && !result && clock.used >= chaos.round * Chaos.ROUND_MS;
+    return Boolean(chaos) && !result && !waiting && chaos.round < Chaos.ROUNDS && clock.used >= chaos.round * Chaos.ROUND_MS;
   }
 
   // Starts the next chaos round after `delay` if it is due, and returns whether it is. `known` holds
@@ -757,7 +759,7 @@
     drafting = true;
     const id = gameId;
     setTimeout(() => {
-      if (id === gameId && !result && !draft) startDraft(known);
+      if (id === gameId && !result && !draft && !waiting) startDraft(known);
     }, delay);
     return true;
   }
@@ -773,7 +775,9 @@
     for (const color of [WHITE, BLACK]) {
       const pick = (known && known[color]) || (seat(color) === 'friend' ? friendPicks[round] : null);
       if (pick && draft.offers[color].includes(pick)) draft.picks[color] = pick;
-      if (seat(color) === 'computer') draft.picks[color] = computerPick(color);
+      // A side with nothing it could be offered sits this draft out.
+      if (!draft.offers[color].length) draft.picks[color] = Chaos.NONE;
+      else if (seat(color) === 'computer') draft.picks[color] = computerPick(color);
     }
     render();
     nextPick();
@@ -843,7 +847,7 @@
   }
 
   function showDraftCard(title, choices) {
-    document.getElementById('draft-round').textContent = `Chaos draft ${draft.round + 1}`;
+    document.getElementById('draft-round').textContent = `Chaos draft ${draft.round + 1} of ${Chaos.ROUNDS}`;
     document.getElementById('draft-title').textContent = title;
     document.getElementById('draft-choices').replaceChildren(...choices);
     document.getElementById('draft-timer').hidden = !choices.length;
@@ -888,6 +892,7 @@
   // Says what each side picked, over the board, and powers up the pieces it went to.
   function showChaos(outcomes) {
     for (const { color, powerup, replaced } of outcomes) {
+      if (!powerup) continue;
       const item = document.createElement('li');
       const who = capitalise(sideName(color));
       const whose = sideName(color) === 'you' ? 'your' : mode === 'local' ? `${sideName(color)}’s` : 'their';
@@ -1608,8 +1613,9 @@
     const name = setupName(gameSetup);
     if (name) parts.push(name);
     if (chaos && !result) {
-      if (drafting) parts.push(`draft ${chaos.round + 1}`);
-      else parts.push(`next powerup draft in ${formatTime(Math.max(0, chaos.round * Chaos.ROUND_MS - usedNow()))} of play`);
+      if (drafting) parts.push(`draft ${chaos.round + 1} of ${Chaos.ROUNDS}`);
+      else if (chaos.round < Chaos.ROUNDS) parts.push(`draft ${chaos.round + 1} of ${Chaos.ROUNDS} in ${formatTime(Math.max(0, chaos.round * Chaos.ROUND_MS - usedNow()))} of play`);
+      else parts.push(`all ${Chaos.ROUNDS} drafts done`);
     }
     const text = parts.join(' · ');
     gameInfoEl.hidden = !text;
@@ -2195,6 +2201,8 @@
     },
     resume() {
       waiting = false;
+      // A draft that was about to open when the friend dropped out opens now.
+      if (drafting && !draft && chaosDue()) startDraft();
       render();
     },
     move(message) {
@@ -2262,7 +2270,10 @@
     friendName = '';
     waiting = false;
     save();
-    newGame();
+    // Online, the real game only starts once the friend joins (with the host's rules); until then a
+    // plain board waits behind the online panel.
+    if (mode === 'online') newGame(undefined, { setup: { variant: 'classic' } });
+    else newGame();
     if (mode === 'online') Online.open(onlineHooks);
   }
 
