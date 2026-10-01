@@ -18,17 +18,25 @@
   <main>
     <h1><span class="logo">♞&#xFE0E;</span> chessMess</h1>
 
-    <aside id="opponents" class="opponents" aria-label="Choose your opponent">
-      <h2>Opponent</h2>
-      <div id="opponent-list" class="opponent-list" role="radiogroup" aria-label="Opponent"></div>
-      <p id="opponents-note" class="opponents-note"></p>
-    </aside>
-
-    <section class="score" aria-label="Score">
-      <div><span class="score-value" id="score-me">0</span><span class="score-label" id="score-me-label">You</span></div>
-      <div><span class="score-value" id="score-draws">0</span><span class="score-label">Draws</span></div>
-      <div><span class="score-value" id="score-them">0</span><span class="score-label" id="score-them-label">Computer</span></div>
+    <section id="menu" class="menu" aria-label="Menu">
+      <nav class="menu-head" aria-label="Where you are">
+        <button id="menu-back" type="button" class="menu-back" aria-label="Back">‹</button>
+        <ol id="menu-path" class="menu-path"></ol>
+      </nav>
+      <h2 id="menu-title" class="menu-title"></h2>
+      <p id="menu-hint" class="menu-hint"></p>
+      <div id="menu-body" class="menu-body"></div>
     </section>
+
+    <section id="play" class="play" aria-label="Game">
+    <div class="game-bar">
+      <button id="open-menu" type="button" class="menu-button">☰ Menu</button>
+      <section class="score" aria-label="Score">
+        <div><span class="score-label" id="score-me-label">You</span><span class="score-value" id="score-me">0</span></div>
+        <div><span class="score-label">Draws</span><span class="score-value" id="score-draws">0</span></div>
+        <div><span class="score-value" id="score-them">0</span><span class="score-label" id="score-them-label">Computer</span></div>
+      </section>
+    </div>
 
     <p id="status" class="status" role="status"></p>
     <p id="game-info" class="game-info" hidden></p>
@@ -61,8 +69,9 @@
             <div class="overlay-actions">
               <button id="play-again" type="button" class="primary">Play again</button>
               <button id="review-game" type="button">Review game</button>
-              <button id="view-board" type="button">View board</button>
+              <button id="game-over-menu" type="button">Menu</button>
             </div>
+            <button id="view-board" type="button" class="link-button">View the board</button>
           </div>
         </div>
         <div id="draft" class="overlay" hidden>
@@ -142,63 +151,13 @@
       </form>
     </section>
 
-    <section class="controls">
-      <div class="controls-row">
-        <label>Opponent
-          <select id="mode">
-            <option value="computer">Computer</option>
-            <option value="local">Friend, same screen</option>
-            <option value="online">Friend, online</option>
-          </select>
-        </label>
-        <label id="variant-field">Game mode
-          <select id="variant">
-            <option value="classic">Classic (no clock)</option>
-            <option value="blitz">Blitz</option>
-            <option value="rapid">Rapid</option>
-            <option value="long">Long</option>
-            <option value="chaos">Chaos (5 min)</option>
-            <option value="custom">Custom position</option>
-          </select>
-        </label>
-        <label id="time-field">Time
-          <select id="time"></select>
-        </label>
-        <label id="side-field">Play as
-          <select id="side">
-            <option value="white">White</option>
-            <option value="black">Black</option>
-          </select>
-        </label>
-        <label id="name-field">Your name
-          <input id="name" maxlength="20" placeholder="You" autocomplete="nickname" spellcheck="false">
-        </label>
-        <label id="white-name-field">White
-          <input id="white-name" maxlength="20" placeholder="White" spellcheck="false">
-        </label>
-        <label id="black-name-field">Black
-          <input id="black-name" maxlength="20" placeholder="Black" spellcheck="false">
-        </label>
-      </div>
-      <div id="rating-field" class="controls-row rating-row">
-        <label class="rating-slider">Custom rating
-          <input id="rating" type="range" min="400" max="2400" step="100" value="1200">
-        </label>
-        <p class="rating-readout">
-          <strong id="rating-value">1200</strong>
-          <span id="rating-name"></span>
-        </p>
-        <p class="my-rating">Your rating <strong id="my-rating">1200</strong></p>
-      </div>
-      <div class="controls-row">
-        <button id="new-game" type="button" class="primary">New game</button>
-        <button id="undo" type="button" aria-label="Undo move">↶&#xFE0E; Undo</button>
-        <button id="redo" type="button" aria-label="Redo move">Redo ↷&#xFE0E;</button>
-        <button id="edit-position" type="button">Edit position</button>
-        <button id="resign" type="button">Resign</button>
-        <button id="review-last" type="button">Review last game</button>
-        <button id="reset-score" type="button" class="quiet">Reset score</button>
-      </div>
+    <section class="actions" aria-label="Game actions">
+      <button id="undo" type="button" aria-label="Undo move" title="Undo">↶&#xFE0E; Undo</button>
+      <button id="redo" type="button" aria-label="Redo move" title="Redo">Redo ↷&#xFE0E;</button>
+      <button id="edit-position" type="button">Edit position</button>
+      <button id="resign" type="button">Resign</button>
+      <button id="new-game" type="button" class="primary">New game</button>
+    </section>
     </section>
   </main>
 

@@ -36,22 +36,9 @@
   const promotionChoicesEl = document.getElementById('promotion-choices');
   const gameOverEl = document.getElementById('game-over');
   const mainEl = document.querySelector('main');
-  const modeEl = document.getElementById('mode');
-  const ratingEl = document.getElementById('rating');
-  const opponentListEl = document.getElementById('opponent-list');
-  const opponentNoteEl = document.getElementById('opponents-note');
-  const sideEl = document.getElementById('side');
-  const nameEls = {
-    me: document.getElementById('name'),
-    white: document.getElementById('white-name'),
-    black: document.getElementById('black-name'),
-  };
   const resignEl = document.getElementById('resign');
   const undoEl = document.getElementById('undo');
   const redoEl = document.getElementById('redo');
-  const reviewLastEl = document.getElementById('review-last');
-  const variantEl = document.getElementById('variant');
-  const timeEl = document.getElementById('time');
   const editPositionEl = document.getElementById('edit-position');
   const gameInfoEl = document.getElementById('game-info');
   const clockEls = { top: document.getElementById('clock-top'), bottom: document.getElementById('clock-bottom') };
@@ -75,16 +62,15 @@
     scores.computer = { me: saved.player || 0, them: saved.computer || 0, draws: saved.draws || 0 };
   }
   const joinCode = new URLSearchParams(location.search).get('join');
-  modeEl.value = joinCode ? 'online' : MODES.includes(saved.mode) ? saved.mode : 'computer';
   // (Before the slider there were three difficulties.)
   const OLD_LEVELS = { easy: 600, medium: 1200, hard: 2000 };
-  ratingEl.value = clampRating(saved.rating ?? OLD_LEVELS[saved.difficulty] ?? START_RATING);
+  let rating = clampRating(saved.rating ?? OLD_LEVELS[saved.difficulty] ?? START_RATING);   // our engine's, when you play it
   // Who you play in computer mode: 'custom' (our engine, at the slider's rating) or a grandmaster's
   // id. (A saved rating of 2850 was the slider's old Magnus stop.)
   let opponent = Grandmasters.find(saved.opponent) ? saved.opponent : saved.rating >= 2800 ? 'carlsen' : 'custom';
-  sideEl.value = saved.side === 'black' ? 'black' : 'white';
+  let side = ['white', 'black', 'random'].includes(saved.side) ? saved.side : 'white';   // the side you play
   const names = { me: '', white: '', black: '', ...saved.names };
-  for (const key of Object.keys(nameEls)) nameEls[key].value = names[key] = cleanName(names[key]);
+  for (const key of Object.keys(names)) names[key] = cleanName(names[key]);
   let myRating = Number.isFinite(saved.myRating) ? saved.myRating : START_RATING;
   let variant = VARIANTS[saved.variant] ? saved.variant : 'classic';
   // The chosen time control of each timed mode, as an index into its list.
@@ -94,9 +80,10 @@
     if (Number.isInteger(index) && VARIANTS[key].times[index]) timeChoice[key] = index;
   }
   let customFen = typeof saved.customFen === 'string' && !checkPosition(saved.customFen).error ? saved.customFen : START_FEN;
-  variantEl.value = variant;
 
-  let mode = modeEl.value;  // 'computer', 'local' (two players on this screen) or 'online'
+  // The game being played is against 'computer', 'local' (two players on this screen) or 'online'.
+  // An online game needs connecting first, so the page never opens on one (except from a link).
+  let mode = joinCode ? 'online' : MODES.includes(saved.mode) && saved.mode !== 'online' ? saved.mode : 'computer';
   let game, playerColor, legal, selected, lastMove, positions, history, result;
   let lastFx = 0;           // what chaos powerups did along with the last move (see Game.lastFx)
   let powerTime = 0;        // clock time a chaos powerup gave for the last move
@@ -152,7 +139,7 @@
 
   function save() {
     store(STORAGE_KEY, {
-      scores, mode, opponent, rating: sliderRating(), myRating, names, side: sideEl.value,
+      scores, mode, opponent, rating, myRating, names, side,
       variant, times: timeChoice, customFen,
     });
   }
@@ -162,7 +149,13 @@
   }
 
   function sliderRating() {
-    return Number(ratingEl.value);
+    return rating;
+  }
+
+  // The color you play next, from your choice of side.
+  function chosenColor() {
+    if (side === 'random') return Math.random() < 0.5 ? WHITE : BLACK;
+    return side === 'black' ? BLACK : WHITE;
   }
 
   function cleanName(text) {
@@ -386,7 +379,7 @@
     gameSetup = state ? receivedSetup(state.setup) : chosenSetup();
     game = new Game(gameSetup.fen);
     startTurn = game.turn;
-    playerColor = mode === 'local' ? WHITE : color ?? (sideEl.value === 'black' ? BLACK : WHITE);
+    playerColor = mode === 'local' ? WHITE : color ?? chosenColor();
     gameGm = mode === 'computer' ? Grandmasters.find(opponent) : null;
     gameRating = gameGm ? gameGm.rating : sliderRating();
     selected = -1;
@@ -642,7 +635,7 @@
   // a chaos round or a friend who dropped out.
   function syncClock() {
     if (!clock) return;
-    const paused = !clock.started || result || drafting || waiting || (mode !== 'online' && (reviewing || editing));
+    const paused = !clock.started || result || drafting || waiting || (mode !== 'online' && (reviewing || editing || menuOpen));
     const wanted = paused ? null : game.turn;
     if (clock.running === wanted) return;
     stopClock();
@@ -1424,7 +1417,6 @@
   function render() {
     syncClock();
     mainEl.dataset.mode = mode;
-    mainEl.dataset.variant = variant;
     mainEl.dataset.clock = clock ? 'on' : 'off';
     renderGameInfo();
     if (reviewing) return;
@@ -1442,11 +1434,16 @@
       });
     }
     renderClocks();
+    // Only the actions that make sense in this kind of game.
+    const offline = mode !== 'online';
+    undoEl.hidden = redoEl.hidden = !(offline && !clock && !chaos);
+    editPositionEl.hidden = !(offline && gameSetup.variant === 'custom');
+    document.getElementById('new-game').hidden = !offline;
     resignEl.disabled = Boolean(result) || waiting || editing;
     undoEl.disabled = !canUndo();
     redoEl.disabled = !canRedo();
-    reviewLastEl.disabled = !lastGame.moves || drafting || editing;
     editPositionEl.disabled = editing || drafting;
+    menuButtonEl.disabled = drafting;
 
     const text = statusText();
     if (statusEl.textContent !== text) {
@@ -1458,7 +1455,6 @@
     const [first, second] = columnNames();
     document.getElementById('score-me-label').textContent = first;
     document.getElementById('score-them-label').textContent = second;
-    renderRating();
     for (const who of Object.keys(scoreEls)) {
       const el = scoreEls[who], value = String(scores[mode][who]);
       if (el.textContent !== value) {
@@ -1510,66 +1506,379 @@
     if (gameInfoEl.textContent !== text) gameInfoEl.textContent = text;
   }
 
-  function renderRating() {
-    const chosen = sliderRating();
-    document.getElementById('rating-value').textContent = chosen;
-    // A new rating takes over from the next game, unless this one has not begun.
-    const later = opponent === 'custom' && (gameGm || chosen !== gameRating);
-    document.getElementById('rating-name').textContent = ratingName(chosen) + (later ? ' · from your next game' : '');
-    document.getElementById('my-rating').textContent = myRating;
-    // The filled part of the slider track.
-    ratingEl.style.setProperty('--fill', ((chosen - MIN_RATING) / (MAX_RATING - MIN_RATING) * 100) + '%');
-    renderOpponents();
+  // ---------------------------------------------------------------------------
+  // The menu: one choice per screen, like the branches of a tree. First the kind of opponent, then
+  // only the choices that kind needs (which computer, the game mode, the time, your side), and then
+  // the game. The board shows only once a game starts; the Menu button comes back here.
+  // ---------------------------------------------------------------------------
+
+  const menuBodyEl = document.getElementById('menu-body');
+  const menuPathEl = document.getElementById('menu-path');
+  const menuBackEl = document.getElementById('menu-back');
+  const menuButtonEl = document.getElementById('open-menu');
+  let menuOpen = false;
+  let menuMode = mode;      // the kind of opponent being set up
+  // The screens followed to get to the one showing, each with what was picked to get there.
+  let trail = [];
+
+  const VARIANT_TEXT = {
+    classic: 'No clock: take your time. Moves can be taken back.',
+    blitz: 'Fast games of 3 to 5 minutes each.',
+    rapid: 'Steadier games of 10 to 30 minutes each.',
+    long: 'Long games of 45 to 90 minutes each.',
+    chaos: '5 minutes each, with Clash Royale-style powerups drafted every 45 seconds.',
+    custom: 'Set up any position on the board and play from it.',
+  };
+  const VARIANT_ICONS = { classic: '♟︎', blitz: '⚡', rapid: '⏱️', long: '🕰️', chaos: '🌀', custom: '✏️' };
+
+  function card({ icon, title, text = '', chosen = false, onClick }) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'menu-card' + (chosen ? ' chosen' : '');
+    const iconEl = document.createElement('span');
+    iconEl.className = 'menu-icon';
+    if (typeof icon === 'string') iconEl.textContent = icon;
+    else iconEl.append(icon);
+    const body = document.createElement('span');
+    body.className = 'menu-text';
+    const titleEl = document.createElement('strong');
+    titleEl.textContent = title;
+    body.append(titleEl);
+    if (text) {
+      const textEl = document.createElement('span');
+      textEl.textContent = text;
+      body.append(textEl);
+    }
+    const arrow = document.createElement('span');
+    arrow.className = 'menu-arrow';
+    arrow.textContent = '›';
+    button.append(iconEl, body, arrow);
+    button.addEventListener('click', onClick);
+    return button;
   }
 
-  // The opponent panel beside the board: a card for our own engine at the slider's rating, and one
-  // for each grandmaster.
-  function renderOpponents() {
-    if (!opponentListEl.children.length) {
-      const custom = { id: 'custom', name: 'Custom', initials: '⚙' };
-      opponentListEl.append(...[custom, ...Grandmasters.LIST].map((gm) => {
-        const card = document.createElement('button');
-        card.type = 'button';
-        card.className = 'opponent';
-        card.dataset.id = gm.id;
-        card.setAttribute('role', 'radio');
-        const avatar = document.createElement('span');
-        avatar.className = 'opponent-avatar';
-        avatar.textContent = gm.initials;
-        // A color of its own for each player, spread around the color wheel.
-        if (gm.rank) avatar.style.setProperty('--hue', (gm.rank * 137) % 360);
-        const name = document.createElement('span');
-        name.className = 'opponent-name';
-        name.textContent = gm.name;
-        const detail = document.createElement('span');
-        detail.className = 'opponent-detail';
-        if (gm.rank) detail.textContent = `#${gm.rank} · ${gm.country} · ${gm.rating}`;
-        card.append(avatar, name, detail);
-        card.addEventListener('click', () => chooseOpponent(gm.id));
-        return card;
-      }));
-    }
-    for (const card of opponentListEl.children) {
-      const chosen = card.dataset.id === opponent;
-      card.classList.toggle('chosen', chosen);
-      card.setAttribute('aria-checked', String(chosen));
-      if (card.dataset.id === 'custom') {
-        card.querySelector('.opponent-detail').textContent = `Our engine · ${sliderRating()} (slider below)`;
+  function menuButton(text, onClick, primary = true) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'menu-go' + (primary ? ' primary' : '');
+    button.textContent = text;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function linkButton(text, onClick) {
+    const button = menuButton(text, onClick, false);
+    button.className = 'link-button';
+    return button;
+  }
+
+  function nameField(label, key, placeholder) {
+    const wrap = document.createElement('label');
+    wrap.className = 'menu-field';
+    const input = document.createElement('input');
+    input.maxLength = NAME_LENGTH;
+    input.placeholder = placeholder;
+    input.spellcheck = false;
+    input.autocomplete = key === 'me' ? 'nickname' : 'off';
+    input.value = names[key];
+    input.addEventListener('input', () => {
+      names[key] = cleanName(input.value);
+      save();
+    });
+    wrap.append(label, input);
+    return wrap;
+  }
+
+  function avatar(gm) {
+    const el = document.createElement('span');
+    el.className = 'opponent-avatar';
+    el.textContent = gm.initials;
+    // A color of its own for each player, spread around the color wheel.
+    if (gm.rank) el.style.setProperty('--hue', (gm.rank * 137) % 360);
+    return el;
+  }
+
+  // The game on the board, in a few words.
+  function describeGame() {
+    const [first, second] = columnNames();
+    const kind = setupName(gameSetup);
+    return `${first} vs ${second}` + (kind ? ` · ${kind}` : '');
+  }
+
+  function gameInProgress() {
+    return Boolean(game) && !result && (history.length > 0 || mode === 'online' || editing);
+  }
+
+  // After the game mode (and its time), the last screen: your side, or both names on a shared screen.
+  function lastStep(label) {
+    go(menuMode === 'local' ? 'names' : 'side', label);
+  }
+
+  // Each screen: { title, hint, items }.
+  const STEPS = {
+    home() {
+      const items = [];
+      if (gameInProgress()) {
+        items.push(card({ icon: '▶', title: 'Back to your game', text: describeGame(), chosen: true, onClick: closeMenu }));
       }
-    }
-    opponentNoteEl.textContent = stockfishFailed
-      ? 'Stockfish could not be loaded (offline?), so the grandmasters are playing as our own engine at 2400 for now.'
-      : `The top 10 of FIDE's ${Grandmasters.LIST_DATE} rating list, played by the Stockfish engine at a strength to match each rating (not their personal style).` +
-        (variant === 'chaos' ? ' Stockfish doesn’t know chaos powerups, so in Chaos games they are played by our own engine at full strength.' : '');
+      items.push(
+        card({ icon: '🤖', title: 'Play the computer', text: 'Our engine at any strength, or a top-10 grandmaster.', onClick: () => go('computer', 'Computer', 'computer') }),
+        card({ icon: '👥', title: 'Play a friend here', text: 'Take turns on this screen.', onClick: () => go('variant', 'Friend here', 'local') }),
+        card({ icon: '🌐', title: 'Play a friend online', text: 'Send a link and play from anywhere.', onClick: () => go('online', 'Online', 'online') }),
+      );
+      const foot = document.createElement('div');
+      foot.className = 'menu-foot';
+      const rated = document.createElement('span');
+      rated.textContent = `Your rating ${myRating}`;
+      foot.append(rated);
+      if (lastGame.moves) {
+        foot.append(linkButton('Review last game', () => {
+          closeMenu();
+          startReview();
+        }));
+      }
+      foot.append(linkButton('Reset scores', () => {
+        for (const key of Object.keys(scores)) scores[key] = blankScore();
+        save();
+        renderMenu();
+      }));
+      items.push(foot);
+      return { title: 'Play chess', items };
+    },
+
+    computer() {
+      const custom = { id: 'custom', name: 'Our engine', initials: '⚙' };
+      const items = [custom, ...Grandmasters.LIST].map((gm) => card({
+        icon: avatar(gm),
+        title: gm.name,
+        text: gm.rank ? `#${gm.rank} in the world · ${gm.country} · ${gm.rating}` : `Any strength from ${MIN_RATING} to ${MAX_RATING}`,
+        chosen: opponent === gm.id,
+        onClick: () => {
+          opponent = gm.id;
+          stockfishFailed = false;
+          save();
+          if (gm.rank) go('variant', gm.name.split(' ').pop());
+          else go('rating', 'Our engine');
+        },
+      }));
+      const hint = stockfishFailed
+        ? 'Stockfish could not be loaded (offline?), so the grandmasters play as our own engine at 2400 for now.'
+        : `The grandmasters are FIDE's ${Grandmasters.LIST_DATE} top 10, played by the Stockfish engine at their strength (not their style).`;
+      return { title: 'Who do you want to play?', hint, items };
+    },
+
+    rating() {
+      const wrap = document.createElement('div');
+      wrap.className = 'rating-pick';
+      const value = document.createElement('strong');
+      const label = document.createElement('span');
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = MIN_RATING;
+      slider.max = MAX_RATING;
+      slider.step = 100;
+      slider.value = rating;
+      slider.setAttribute('aria-label', 'Computer rating');
+      const show = () => {
+        value.textContent = rating;
+        label.textContent = ratingName(rating);
+        // The filled part of the slider track.
+        slider.style.setProperty('--fill', ((rating - MIN_RATING) / (MAX_RATING - MIN_RATING) * 100) + '%');
+      };
+      slider.addEventListener('input', () => {
+        rating = Number(slider.value);
+        save();
+        show();
+      });
+      show();
+      const readout = document.createElement('p');
+      readout.className = 'rating-readout';
+      readout.append(value, label);
+      wrap.append(readout, slider);
+      return {
+        title: 'How strong should it be?',
+        hint: `Lower ratings look less far ahead and make human-like mistakes. Your own rating is ${myRating}.`,
+        items: [wrap, menuButton('Next', () => go('variant', String(rating)))],
+      };
+    },
+
+    variant() {
+      const items = Object.keys(VARIANTS).map((id) => card({
+        icon: VARIANT_ICONS[id],
+        title: VARIANTS[id].name,
+        text: VARIANT_TEXT[id],
+        chosen: variant === id,
+        onClick: () => {
+          variant = id;
+          save();
+          if (VARIANTS[id].times) go('time', VARIANTS[id].name);
+          else lastStep(VARIANTS[id].name);
+        },
+      }));
+      return { title: 'What kind of game?', items };
+    },
+
+    time() {
+      const items = VARIANTS[variant].times.map(([minutes, increment], index) => {
+        const name = timeName({ base: minutes * 60000, inc: increment * 1000 });
+        return card({
+          icon: '⏱️',
+          title: name,
+          text: increment ? `${minutes} minutes each, plus ${increment} seconds for every move` : `${minutes} minutes each`,
+          chosen: timeChoice[variant] === index,
+          onClick: () => {
+            timeChoice[variant] = index;
+            save();
+            lastStep(name);
+          },
+        });
+      });
+      return { title: 'How much time?', items };
+    },
+
+    side() {
+      const choose = (value) => {
+        side = value;
+        save();
+        startFromMenu();
+      };
+      const online = menuMode === 'online';
+      const items = [
+        nameField('Your name', 'me', 'You'),
+        card({ icon: pieceEl(WHITE | KING), title: 'White', text: 'You move first.', chosen: side === 'white', onClick: () => choose('white') }),
+        card({ icon: pieceEl(BLACK | KING), title: 'Black', text: `${online ? 'Your friend' : 'The computer'} moves first.`, chosen: side === 'black', onClick: () => choose('black') }),
+        card({ icon: '🎲', title: 'Random', text: 'Toss a coin for it.', chosen: side === 'random', onClick: () => choose('random') }),
+      ];
+      return {
+        title: online ? 'Which side do you want?' : 'Which side do you play?',
+        hint: online ? 'Then you get a link to send your friend.' : '',
+        items,
+      };
+    },
+
+    names() {
+      return {
+        title: 'Who’s playing?',
+        hint: 'Names are optional. White moves first.',
+        items: [nameField('White', 'white', 'White'), nameField('Black', 'black', 'Black'), menuButton('Start the game', startFromMenu)],
+      };
+    },
+
+    online() {
+      return {
+        title: 'Play a friend online',
+        items: [
+          card({ icon: '✉️', title: 'Create a game', text: 'Pick the rules, then send your friend the link.', onClick: () => go('variant', 'Create') }),
+          card({ icon: '🔑', title: 'Join a game', text: 'Type in the code your friend sent you.', onClick: () => go('join', 'Join') }),
+        ],
+      };
+    },
+
+    join() {
+      const wrap = document.createElement('label');
+      wrap.className = 'menu-field';
+      const code = document.createElement('input');
+      code.className = 'code';
+      code.placeholder = 'code';
+      code.autocomplete = 'off';
+      code.spellcheck = false;
+      wrap.append('Game code', code);
+      const join = () => {
+        if (!code.value.trim()) return code.focus();
+        menuMode = 'online';
+        menuOpen = false;
+        mainEl.classList.remove('in-menu');
+        setMode('online');
+        Online.join(code.value);
+      };
+      code.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') join();
+      });
+      return {
+        title: 'Join a friend’s game',
+        hint: 'Your friend sees the code (or a link) when they create a game.',
+        items: [nameField('Your name', 'me', 'You'), wrap, menuButton('Join', join)],
+      };
+    },
+  };
+
+  function go(step, label, newMode) {
+    if (newMode) menuMode = newMode;
+    trail.push({ step, label });
+    renderMenu();
   }
 
-  // Picking an opponent starts a game against them.
-  function chooseOpponent(id) {
-    opponent = id;
-    stockfishFailed = false;
-    save();
-    newGame();
+  function renderMenu() {
+    const step = trail.length ? trail[trail.length - 1].step : 'home';
+    const { title, hint = '', items } = STEPS[step]();
+    document.getElementById('menu-title').textContent = title;
+    const hintEl = document.getElementById('menu-hint');
+    hintEl.textContent = hint;
+    hintEl.hidden = !hint;
+    menuBodyEl.replaceChildren(...items);
+    menuBodyEl.animate([{ opacity: 0, transform: 'translateX(18px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
+    // Where you are, like a path through the branches: Play › Computer › Carlsen › Blitz.
+    menuPathEl.replaceChildren(...['Play', ...trail.map((t) => t.label)].map((label, i) => {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.disabled = i === trail.length;
+      button.addEventListener('click', () => {
+        trail = trail.slice(0, i);
+        renderMenu();
+      });
+      item.append(button);
+      return item;
+    }));
+    menuBackEl.hidden = !trail.length;
   }
+
+  function openMenu() {
+    if (drafting) return;
+    menuOpen = true;
+    trail = [];
+    menuMode = mode;
+    turnToken++;   // the computer stops thinking (it carries on when you go back to the game)
+    drag = null;
+    selected = -1;
+    promotionEl.hidden = true;
+    gameOverEl.hidden = true;
+    mainEl.classList.add('in-menu');
+    render();
+    renderMenu();
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+    mainEl.classList.remove('in-menu');
+    render();
+    if (!result && !drafting && !waiting && !editing && seat(game.turn) === 'computer') computerTurn();
+  }
+
+  // The last choice is made: start the game it describes.
+  function startFromMenu() {
+    save();
+    menuOpen = false;
+    mainEl.classList.remove('in-menu');
+    if (menuMode === 'online') {
+      // A fresh connection, then the game is hosted straight away (after setting up the position,
+      // for a custom one).
+      setMode('online');
+      if (variant === 'custom') openEditor();
+      else Online.host();
+      return;
+    }
+    if (menuMode !== mode) setMode(menuMode);
+    else newGame();
+    if (variant === 'custom') openEditor();
+  }
+
+  menuBackEl.addEventListener('click', () => {
+    trail.pop();
+    renderMenu();
+  });
+  menuButtonEl.addEventListener('click', openMenu);
 
   // ---------------------------------------------------------------------------
   // Review of the last finished game. The review itself lives in review.js; this lends it the
@@ -1647,7 +1956,7 @@
     promotionEl.hidden = true;
     gameOverEl.hidden = true;
     setupErrorEl.textContent = '';
-    setupPlayEl.textContent = mode === 'online' ? 'Use in my next game' : 'Play this position';
+    setupPlayEl.textContent = mode === 'online' ? 'Create the game' : 'Play this position';
     mainEl.classList.add('editing');
     setupEl.hidden = false;
     render();
@@ -1661,7 +1970,7 @@
   }
 
   function renderEditor() {
-    drawBoard({ board: edit.board, inCheck: () => false }, { flip: mode !== 'local' && sideEl.value === 'black' });
+    drawBoard({ board: edit.board, inCheck: () => false }, { flip: mode !== 'local' && side === 'black' });
     for (const button of paletteEl.children) {
       const chosen = Number(button.dataset.tool) === edit.tool;
       button.classList.toggle('chosen', chosen);
@@ -1723,7 +2032,8 @@
     customFen = g.fen();
     save();
     closeEditor();
-    if (mode === 'online') render();
+    // Online, the position is for the game you host, which starts now.
+    if (mode === 'online') Online.host();
     else newGame();
   });
   document.getElementById('setup-cancel').addEventListener('click', () => {
@@ -1800,7 +2110,7 @@
       return setupName(gameSetup);
     },
     preferredColor() {
-      return sideEl.value === 'black' ? BLACK : WHITE;
+      return chosenColor();
     },
     myName() {
       return names.me;
@@ -1822,7 +2132,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Controls
+  // The actions under the board
   // ---------------------------------------------------------------------------
 
   document.getElementById('new-game').addEventListener('click', () => newGame());
@@ -1837,8 +2147,8 @@
   document.getElementById('view-board').addEventListener('click', () => {
     gameOverEl.hidden = true;
   });
+  document.getElementById('game-over-menu').addEventListener('click', openMenu);
   document.getElementById('review-game').addEventListener('click', startReview);
-  reviewLastEl.addEventListener('click', startReview);
 
   resignEl.addEventListener('click', () => {
     if (result || waiting || editing) return;
@@ -1851,75 +2161,13 @@
     render();
   });
 
-  document.getElementById('reset-score').addEventListener('click', () => {
-    scores[mode] = blankScore();
-    save();
-    render();
-  });
-
-  ratingEl.addEventListener('input', () => {
-    // Before the first move it can still change who you are playing.
-    opponent = 'custom';
-    if (mode === 'computer' && !history.length && !result) {
-      gameGm = null;
-      gameRating = sliderRating();
-    }
-    save();
-    render();
-  });
-
-  for (const [key, el] of Object.entries(nameEls)) {
-    el.addEventListener('input', () => {
-      names[key] = cleanName(el.value);
-      save();
-      render();
-    });
-    el.addEventListener('change', () => {
-      el.value = names[key];
-      if (key === 'me' && mode === 'online') Online.sendName(names.me);
-    });
-  }
-
-  // Switching sides starts a fresh game, except online, where it is the side the next game you
-  // create starts you on.
-  sideEl.addEventListener('change', () => {
-    save();
-    if (mode !== 'online') newGame();
-  });
-  modeEl.addEventListener('change', () => setMode(modeEl.value));
-
-  // The time controls of the chosen mode, if it has any.
-  function fillTimes() {
-    const times = VARIANTS[variant].times || [];
-    timeEl.replaceChildren(...times.map(([minutes, increment], index) => {
-      const option = document.createElement('option');
-      option.value = index;
-      option.textContent = timeName({ base: minutes * 60000, inc: increment * 1000 });
-      return option;
-    }));
-    if (times.length) timeEl.value = timeChoice[variant];
-  }
-
-  // A new mode starts a fresh game, except online, where it is the kind of game you host next.
-  // Choosing a custom position opens the editor.
-  variantEl.addEventListener('change', () => {
-    variant = variantEl.value;
-    fillTimes();
-    save();
-    if (mode !== 'online') newGame();
-    else render();
-    if (variant === 'custom') openEditor();
-  });
-  timeEl.addEventListener('change', () => {
-    timeChoice[variant] = Number(timeEl.value);
-    save();
-    if (mode !== 'online') newGame();
-  });
-
-  fillTimes();
-  newGame();
-  if (mode === 'online') {
+  // The page opens on the menu, or straight into a friend's online game from an invite link. Until
+  // a game is chosen, a plain one sits behind the menu.
+  newGame(undefined, { setup: { variant: 'classic' } });
+  if (joinCode) {
     Online.open(onlineHooks);
-    if (joinCode) Online.join(joinCode);
+    Online.join(joinCode);
+  } else {
+    openMenu();
   }
 })();

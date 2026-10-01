@@ -174,40 +174,39 @@ h1 {
 
 .score {
   display: flex;
-  gap: 10px;
-  text-align: center;
+  align-items: baseline;
+  gap: 14px;
+  font-size: 0.8rem;
 }
 
 .score > div {
-  flex: 1;
-  padding: 8px 0 9px;
-  border: 1px solid var(--glass-line);
-  border-radius: 14px;
-  background: var(--glass);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
 }
 
 .score-value {
-  display: block;
-  font-size: 1.7rem;
+  font-size: 1.15rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
 #score-me {
   color: #67e8f9;
-  text-shadow: 0 0 16px rgba(34, 211, 238, 0.6);
+  text-shadow: 0 0 12px rgba(34, 211, 238, 0.6);
 }
 
 #score-them {
   color: #f9a8d4;
-  text-shadow: 0 0 16px rgba(244, 114, 182, 0.6);
+  text-shadow: 0 0 12px rgba(244, 114, 182, 0.6);
 }
 
 .score-label {
-  font-size: 0.72rem;
+  max-width: 9em;
+  overflow: hidden;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .status {
@@ -640,78 +639,9 @@ h1 {
   box-shadow: 0 8px 22px rgba(34, 211, 238, 0.5);
 }
 
-/* Only the choices that matter against the chosen opponent. */
-main:not([data-mode="computer"]) #rating-field,
-main[data-mode="local"] #side-field,
-main[data-mode="local"] #name-field,
-main:not([data-mode="local"]) #white-name-field,
-main:not([data-mode="local"]) #black-name-field,
-main[data-mode="online"] #new-game,
-main[data-mode="online"] #undo,
-main[data-mode="online"] #redo {
-  display: none;
-}
-
-/* ---------- Opponent panel (computer games) ---------- */
-
-.opponents {
-  display: none;
-  margin-bottom: 14px;
-}
-
-main[data-mode="computer"]:not(.reviewing) .opponents {
-  display: block;
-}
-
-.opponents h2 {
-  margin: 0 0 8px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-/* On a narrow screen the opponents are a strip that scrolls sideways above the board. */
-.opponent-list {
-  display: flex;
-  gap: 8px;
-  padding-bottom: 6px;
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-}
-
-.opponent {
-  display: grid;
-  flex: 0 0 150px;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  align-items: center;
-  column-gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--glass-line);
-  border-radius: 14px;
-  background: var(--glass);
-  text-align: left;
-  cursor: pointer;
-  scroll-snap-align: start;
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-}
-
-.opponent:hover {
-  transform: translateY(-2px);
-  border-color: var(--violet);
-}
-
-.opponent.chosen {
-  border-color: transparent;
-  background: linear-gradient(120deg, rgba(139, 92, 246, 0.55), rgba(34, 211, 238, 0.35));
-  box-shadow: 0 8px 22px rgba(139, 92, 246, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
-}
-
+/* A grandmaster's avatar: their initials on a color of their own. */
 .opponent-avatar {
   display: grid;
-  grid-row: 1 / 3;
   place-items: center;
   width: 38px;
   height: 38px;
@@ -725,116 +655,42 @@ main[data-mode="computer"]:not(.reviewing) .opponents {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
-.opponent.chosen .opponent-avatar {
-  box-shadow: 0 0 0 2px #fff, 0 0 16px rgba(34, 211, 238, 0.7);
+/* ---------- Computer rating (a menu screen) ---------- */
+
+.rating-pick {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--glass-line);
+  border-radius: 16px;
+  background: var(--glass);
 }
 
-.opponent[data-id="carlsen"] .opponent-avatar {
-  background: linear-gradient(135deg, #fde68a, #f59e0b);
-  color: #422006;
-  text-shadow: none;
-}
-
-.opponent-name {
-  overflow: hidden;
-  font-size: 0.86rem;
-  font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.opponent-detail {
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
-.opponent.chosen .opponent-detail {
-  color: #e0e7ff;
-}
-
-.opponents-note {
-  margin: 6px 0 0;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  color: var(--muted);
-}
-
-/* On a wide screen the panel is a column to the left of the board. */
-@media (min-width: 1000px) {
-  main[data-mode="computer"]:not(.reviewing) {
-    --board-size: min(calc(100vw - 380px), 64vh, 560px);
-    --square: calc(var(--board-size) / 8);
-    display: grid;
-    grid-template-columns: 250px var(--board-size);
-    column-gap: 24px;
-    width: auto;
-  }
-
-  main[data-mode="computer"]:not(.reviewing) > * {
-    grid-column: 2;
-  }
-
-  main[data-mode="computer"]:not(.reviewing) > h1 {
-    grid-column: 1 / -1;
-  }
-
-  main[data-mode="computer"]:not(.reviewing) > .opponents {
-    grid-row: 2 / span 20;
-    grid-column: 1;
-    align-self: start;
-    margin: 0;
-  }
-
-  .opponent-list {
-    flex-direction: column;
-    max-height: calc(var(--board-size) + 120px);
-    padding: 2px 4px 2px 2px;
-    overflow-x: visible;
-    overflow-y: auto;
-  }
-
-  .opponent {
-    flex: none;
-  }
-}
-
-/* ---------- Computer rating ---------- */
-
-.rating-row {
-  align-items: center;
-}
-
-.controls label.rating-slider {
-  flex: 1 1 220px;
-}
-
-.rating-slider input {
+.rating-pick input {
   width: 100%;
-  height: 22px;
-  margin: 2px 0 0;
+  height: 26px;
+  margin: 0;
   background: none;
-  accent-color: var(--violet);
   cursor: pointer;
   appearance: none;
 }
 
-.rating-slider input::-webkit-slider-runnable-track {
+.rating-pick input::-webkit-slider-runnable-track {
   height: 6px;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--violet), var(--cyan)) 0 / var(--fill, 40%) 100% no-repeat, rgba(255, 255, 255, 0.14);
 }
 
-.rating-slider input::-moz-range-track {
+.rating-pick input::-moz-range-track {
   height: 6px;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--violet), var(--cyan)) 0 / var(--fill, 40%) 100% no-repeat, rgba(255, 255, 255, 0.14);
 }
 
-.rating-slider input::-webkit-slider-thumb {
-  width: 18px;
-  height: 18px;
-  margin-top: -6px;
+.rating-pick input::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -8px;
   border: 2px solid #fff;
   border-radius: 50%;
   background: var(--cyan);
@@ -842,44 +698,28 @@ main[data-mode="computer"]:not(.reviewing) .opponents {
   appearance: none;
 }
 
-.rating-slider input::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+.rating-pick input::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
   border: 2px solid #fff;
   border-radius: 50%;
   background: var(--cyan);
   box-shadow: 0 0 12px rgba(34, 211, 238, 0.8);
 }
 
-.rating-readout,
-.my-rating {
+.rating-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   margin: 0;
-  font-size: 0.8rem;
   color: var(--muted);
 }
 
-.rating-readout {
-  flex: 0 1 12em;
-}
-
 .rating-readout strong {
-  display: block;
-  font-size: 1.35rem;
+  font-size: 2rem;
   font-variant-numeric: tabular-nums;
   color: #67e8f9;
   text-shadow: 0 0 14px rgba(34, 211, 238, 0.55);
-}
-
-.my-rating {
-  text-align: right;
-}
-
-.my-rating strong {
-  display: block;
-  font-family: var(--symbols);
-  font-size: 1.1rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--gold);
 }
 
 .game-over-rating {
@@ -1117,7 +957,8 @@ main.reviewing {
 
 main.reviewing .score,
 main.reviewing .status,
-main.reviewing .controls,
+main.reviewing .actions,
+main.reviewing .game-bar,
 main.reviewing .online,
 main.reviewing .chat {
   display: none;
@@ -1457,30 +1298,18 @@ main.reviewing .board-wrap.lost .board {
   gap: 8px;
 }
 
-/* ---------- Controls ---------- */
+/* ---------- Buttons, and the actions under the board ---------- */
 
-.controls {
-  display: grid;
-  gap: 10px;
-  margin-top: 20px;
-}
-
-.controls-row {
+.actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
 }
 
-.controls label {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 0.72rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.actions button[hidden] {
+  display: none;
 }
 
 select,
@@ -1489,10 +1318,10 @@ button {
   color: var(--text);
 }
 
-/* Name boxes and the chat box, styled like the online panel's inputs. */
-.controls label > input:not([type]),
+/* Text boxes: names, the game code and the chat. */
+.menu-field input,
 .chat-form input {
-  height: 38px;
+  height: 40px;
   padding: 0 12px;
   border: 1px solid var(--glass-line);
   border-radius: 12px;
@@ -1504,14 +1333,15 @@ button {
   color: var(--text);
 }
 
-.controls label > input:not([type]):focus-visible,
+.menu-field input:focus-visible,
 .chat-form input:focus-visible {
   border-color: var(--violet);
   outline: none;
 }
 
-.controls select,
-.controls button,
+.actions button,
+.menu-go,
+.menu-button,
 .online-actions button,
 .overlay-actions button,
 .review-head button,
@@ -1533,8 +1363,9 @@ select option {
   color: var(--text);
 }
 
-.controls select:hover,
-.controls button:hover:not(:disabled),
+.actions button:hover:not(:disabled),
+.menu-go:hover,
+.menu-button:hover:not(:disabled),
 .online-actions button:hover,
 .overlay-actions button:hover,
 .review-head button:hover,
@@ -1544,7 +1375,8 @@ select option {
   box-shadow: 0 8px 22px rgba(139, 92, 246, 0.45);
 }
 
-.controls button:active:not(:disabled),
+.actions button:active:not(:disabled),
+.menu-go:active,
 .online-actions button:active,
 .overlay-actions button:active,
 .review-head button:active,
@@ -1558,32 +1390,32 @@ button.primary {
   font-weight: 600;
 }
 
-.controls button:disabled {
+.actions button:disabled,
+.menu-button:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
-.controls button.quiet {
-  margin-left: auto;
-  padding: 0 4px;
-  border-color: transparent;
+/* A quiet text button. */
+.link-button {
+  padding: 2px 4px;
+  border: 0;
   background: none;
+  font-size: 0.85rem;
   color: var(--muted);
   text-decoration: underline;
+  cursor: pointer;
 }
 
-.controls button.quiet:hover {
-  box-shadow: none;
+.link-button:hover {
   color: var(--text);
 }
 
-/* ---------- Game modes ---------- */
-
-/* The time picker only for timed modes, and "Edit position" only for custom positions. */
-main:is([data-variant="classic"], [data-variant="chaos"], [data-variant="custom"]) #time-field,
-main:not([data-variant="custom"]) #edit-position {
-  display: none;
+#view-board {
+  margin-top: 10px;
 }
+
+/* ---------- Game modes ---------- */
 
 .game-info {
   margin: -8px 0 12px;
@@ -1893,7 +1725,8 @@ main.editing .square {
   cursor: pointer;
 }
 
-main.editing .controls,
+main.editing .actions,
+main.editing .game-bar,
 main.editing .clock,
 main.editing .game-info {
   display: none;
@@ -1997,4 +1830,223 @@ main.reviewing .power-badge {
 @keyframes clock-bonus {
   from { opacity: 1; transform: translateY(0); }
   to { opacity: 0; transform: translateY(-24px); }
+}
+
+/* ---------- Menu ---------- */
+
+/* The menu and the game take turns on the page. */
+main.in-menu .play,
+main:not(.in-menu) .menu {
+  display: none;
+}
+
+.menu {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.menu-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+
+.menu-back {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--glass-line);
+  border-radius: 50%;
+  background: var(--glass);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.menu-back[hidden] {
+  display: none;
+}
+
+.menu-back:hover {
+  border-color: var(--violet);
+}
+
+/* Where you are: Play › Computer › Carlsen › Blitz. */
+.menu-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.82rem;
+}
+
+.menu-path li + li::before {
+  content: "›";
+  margin: 0 6px;
+  color: var(--muted);
+}
+
+.menu-path button {
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.menu-path button:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.menu-path button:disabled {
+  color: var(--text);
+  font-weight: 600;
+  cursor: default;
+}
+
+.menu-title {
+  margin: 4px 0 0;
+  font-size: 1.5rem;
+}
+
+.menu-hint {
+  margin: -6px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.menu-hint[hidden] {
+  display: none;
+}
+
+.menu-body {
+  display: grid;
+  gap: 10px;
+}
+
+/* One choice: an icon, a title with a line about it, and an arrow onwards. */
+.menu-card {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-line);
+  border-radius: 16px;
+  background: var(--glass);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.menu-card:hover,
+.menu-card:focus-visible {
+  transform: translateX(4px);
+  border-color: var(--violet);
+  outline: none;
+  box-shadow: 0 8px 24px rgba(139, 92, 246, 0.35);
+}
+
+.menu-card.chosen {
+  border-color: rgba(34, 211, 238, 0.6);
+  background: linear-gradient(120deg, rgba(139, 92, 246, 0.3), rgba(34, 211, 238, 0.18));
+}
+
+.menu-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji", var(--symbols);
+  font-size: 1.5rem;
+}
+
+.menu-icon .piece {
+  font-family: var(--symbols);
+  font-size: 2rem;
+}
+
+.menu-icon .opponent-avatar {
+  width: 44px;
+  height: 44px;
+}
+
+.menu-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.menu-text strong {
+  font-size: 1rem;
+}
+
+.menu-text span {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.menu-arrow {
+  font-size: 1.5rem;
+  color: var(--muted);
+}
+
+.menu-card:hover .menu-arrow {
+  color: var(--cyan);
+}
+
+.menu-go {
+  justify-self: start;
+  min-width: 140px;
+  height: 44px;
+}
+
+.menu-field {
+  display: grid;
+  gap: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.menu-field input.code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  letter-spacing: 0.1em;
+}
+
+.menu-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* ---------- The bar above the board ---------- */
+
+.game-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.menu-button {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 0.9rem;
 }

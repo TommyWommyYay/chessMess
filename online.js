@@ -596,6 +596,7 @@
       disconnect();
       panelEl.hidden = true;
     },
+    host,
     join,
     sendName(name) {
       if (friend) send({ type: 'name', name });
