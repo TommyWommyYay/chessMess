@@ -977,18 +977,20 @@ main.reviewing .board-wrap.lost .board {
   filter: none;
 }
 
-/* On a wide screen the review panel sits beside the board, as tall as it. */
-@media (min-width: 940px) {
+/* On a wide screen the review panel sits beside the board, as tall as it, so stepping through the
+   moves never needs scrolling. (The board and the panel are the game screen's only visible parts
+   during a review, so they make the two columns.) */
+@media (min-width: 900px) {
   main.reviewing {
-    --board-size: min(calc(100vw - 470px), 74vh, 600px);
-    display: grid;
-    grid-template-columns: auto 320px;
-    column-gap: 24px;
+    --board-size: min(calc(100vw - 470px), calc(100vh - 150px), 640px);
     width: auto;
   }
 
-  main.reviewing h1 {
-    grid-column: 1 / -1;
+  main.reviewing .play {
+    display: grid;
+    grid-template-columns: auto 340px;
+    align-items: start;
+    column-gap: 24px;
   }
 
   main.reviewing .review {
