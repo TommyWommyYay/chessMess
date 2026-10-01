@@ -35,6 +35,8 @@ Open `index.html` in a browser to play — there is nothing to install or build.
 - `grandmasters.js` — the grandmaster opponents (their ratings, and Stockfish in a background worker).
 - `review.js` — the game review.
 - `online.js` — online games: connecting, invites, draw offers and rematches.
+- `fx.js` — the animated background, capture explosions and win fireworks.
+- `manifest.webmanifest`, `icons/`, `sw.js`, `pwa.js` — what makes it an installable app that works offline.
 
 ## Putting it online
 
@@ -42,4 +44,15 @@ A link to the game only works for your friend if the game is on the web. GitHub 
 push the code, then on GitHub open the repository's **Settings → Pages**, set the source to
 *Deploy from a branch*, and choose the branch (e.g. `main`) and the `/ (root)` folder. After a minute or
 so the game is at `https://<your-username>.github.io/chessMess/`.
-- `fx.js` — the animated background, capture explosions and win fireworks.
+
+## Installing it as an app
+
+From the website (not the copy on your computer) the game can be installed like an app, with its own
+icon and window, and played offline (online games still need the internet, of course):
+
+- **Android (Chrome)** and **Windows/Mac (Chrome or Edge)**: *Install app* at the bottom of the menu,
+  or the install icon in the address bar.
+- **iPhone/iPad (Safari)**: *Install app* in the menu shows how: **Share → Add to Home Screen**.
+
+Installed copies update themselves: a new version pushed to GitHub shows up the next time the app is
+opened with an internet connection.

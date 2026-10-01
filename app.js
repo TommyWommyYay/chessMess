@@ -1748,6 +1748,12 @@
           startReview();
         }));
       }
+      if (InstallApp.available()) {
+        foot.append(linkButton('Install app', () => {
+          if (InstallApp.canPrompt()) InstallApp.install();
+          else go('install', 'Install app');
+        }));
+      }
       foot.append(linkButton('Reset scores', () => {
         for (const key of Object.keys(scores)) scores[key] = blankScore();
         save();
@@ -1908,7 +1914,28 @@
         items: [nameField('Your name', 'me', 'You'), wrap, menuButton('Join', join)],
       };
     },
+
+    // Only reached on an iPhone or iPad, which install from Safari's Share menu rather than a button.
+    install() {
+      const steps = document.createElement('ol');
+      steps.className = 'install-steps';
+      steps.append(...[
+        'Tap the Share button at the bottom of Safari (the square with an arrow pointing up).',
+        'Scroll down and tap Add to Home Screen.',
+        'Tap Add. chessMess now has its own icon and opens full-screen, even offline.',
+      ].map((text) => {
+        const item = document.createElement('li');
+        item.textContent = text;
+        return item;
+      }));
+      return { title: 'Install chessMess', hint: 'Put the game on your home screen like an app.', items: [steps] };
+    },
   };
+
+  // The browser can offer installing only after the page has loaded; show the link once it does.
+  InstallApp.onChange(() => {
+    if (menuOpen && !trail.length) renderMenu();
+  });
 
   function go(step, label, newMode) {
     if (newMode) menuMode = newMode;
